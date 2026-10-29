@@ -324,6 +324,8 @@ tr.row-t1 td{background:rgba(73,209,127,.05)}
 .sync-qr{display:inline-block;background:#fff;padding:8px;border-radius:8px;margin:6px 0}
 .sync-qr svg{display:block;width:240px;height:240px;max-width:70vw;max-height:70vw}
 .sync-linkbar{margin:10px 16px}
+/* compo d'une équipe collée n'importe où (29/10/2026) */
+.compo-bar{margin:10px 16px} .compo-bar textarea{width:100%;box-sizing:border-box;font-size:12px;margin-top:6px;background:transparent;color:inherit;border:1px solid var(--line2);border-radius:4px;padding:6px}
 .sync-wide{grid-column:span 2} @media(max-width:980px){.sync-wide{grid-column:auto}}
 .sync-help ol{margin:6px 0 0 18px;padding:0} .sync-help li{margin:4px 0}
 .sync-help code{font-family:var(--mono);font-size:12px;color:var(--crease)}
@@ -345,6 +347,7 @@ tr.row-t1 td{background:rgba(73,209,127,.05)}
     <button class="primary" id="load">Charger la journée</button>
     <button class="ghost" id="reload" title="Ignorer le cache et recharger">↻ Forcer</button>
     <button class="ghost" id="lineupsBtn" title="Vérifier maintenant les gardiens annoncés et les compositions">Compositions</button>
+    <button class="ghost" id="compoBtn" title="Range sur son match la compo d'une équipe copiée (PuckPedia, même la page entière). Sur PC, Ctrl+V n'importe où dans la page fait la même chose ; sur le téléphone, « Partager » vers l'appli installée.">📋 Coller compo</button>
     <label class="chk autolu" id="autoLUlbl" title="Vérifie seul les compositions des matchs qui commencent dans les 6 heures, toutes les N minutes (réglable dans Réglages). La page doit rester ouverte."><input type="checkbox" id="autoLU"> Vérif. auto <span id="autoLUinfo" class="dimtxt"></span></label>
     <div>
       <div class="status" id="status">Prêt.</div>
@@ -572,7 +575,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-10-28';
+const BUILD='2026-10-29';
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
 const S = {
@@ -2460,7 +2463,7 @@ const FAM_LBL={'1X2':'vainqueur, prolongation incluse','60min':'temps réglement
 const normTxt=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/['’`]/g,'').replace(/[^a-z]+/g,' ').trim();
 const lastOf=name=>String(name||'').replace(/^[^\s.]{1,2}\.\s*/,'');       // « C. McDavid » → « McDavid »
 const initOf=name=>{ const m=String(name||'').match(/^([^\s.])\./); return m?normTxt(m[1]):''; };
-const ABS_HDR=/^\s*(joueurs\s+)?(absents?|bless[eé]s?|indisponibles?|non\s+align|ray[eé]s?|missing|injur|out\s*$|scratch|suspend)/i;
+const ABS_HDR=/^\s*(joueurs\s+)?(absents?|bless[eé]s?|indisponibles?|non\s+align|ray[eé]s?|missing|injur|out\s*$|(healthy\s+)?scratch|suspend)/i;
 // Texte venu d'une IMAGE : la lecture colle souvent l'initiale au nom (« SanheimT. ») et
 // fait parfois une faute de lettre (« Makin » pour Malkin). On détache les initiales, et une
 // tolérance bornée s'applique : 1 faute dès 5 lettres, 2 dès 8, jamais pour un homonyme,
@@ -2475,29 +2478,64 @@ function editDist(a,b,max){
   return prev[b.length];
 }
 const tolFor=L=>L.length>=8?2:(L.length>=5?1:0);
+// Rubrique « absents » d'une page ENTIÈRE (29/10/2026). « Tout sélectionner » sur PuckPedia emporte aussi le menu du
+// site (« Injuries »…) ; une page de match, ou un aperçu NHL.com, donne la rubrique « absents » d'une équipe AVANT la
+// composition de l'autre. Lire « tout ce qui suit la PREMIÈRE rubrique » comme absent retirait alors toute une équipe.
+// Pour CETTE équipe, la rubrique retenue est la première que suivent moins de ABS_MAXN de ses joueurs, ou qu'en
+// précèdent plus qu'il n'en suit : une vraie liste d'absents est courte et vient après la composition ; un menu ou la
+// rubrique de l'autre équipe est suivi de toute la compo. La rubrique s'arrête à la première ligne qui cite au moins
+// deux joueurs d'une AUTRE équipe (la compo suivante, sur une page de match ou de la soirée) : une liste d'absents ne
+// cite qu'un joueur par ligne, ou les siens. Aucun changement quand la première rubrique était la bonne.
+const ABS_MAXN=8;
+// mémoires : lignes normalisées du dernier texte (il est lu pour chaque équipe du jour), nom normalisé de chaque joueur,
+// homonymes de chaque liste de joueurs
+let RL_NL=null; const RL_KEY=new WeakMap(), RL_EV=new WeakMap();
+const rlKey=p=>{ let k=RL_KEY.get(p); if(!k){ k={L:normTxt(lastOf(p.name)),I:initOf(p.name)}; RL_KEY.set(p,k); } return k; };
+function rlGroups(everyone){ let G=RL_EV.get(everyone);
+  if(!G){ G=new Map(); for(const p of everyone){ const L=rlKey(p).L; if(!G.has(L)) G.set(L,[]); G.get(L).push(p); } RL_EV.set(everyone,G); }
+  return G; }
 function recognizeLineup(text,skaters,everyone=skaters,fuzzy=false){
   if(fuzzy) text=ocrFix(text);
-  const lines=String(text||'').split(/\r?\n/), cut=lines.findIndex(l=>ABS_HDR.test(l));
+  text=String(text||'');
+  let C=RL_NL; if(!C||C.t!==text){ const ls=text.split(/\r?\n/), n2=ls.map(l=>normTxt(l));
+    C=RL_NL={t:text,lines:ls,n2,nl:n2.map(x=>' '+x+' '),all:' '+n2.join('  ')+' ',one:' '+n2.filter(Boolean).join(' ')+' ',pr:new WeakMap()}; }
+  const {lines,n2,nl:NL,all:ALL}=C, key=rlKey, G=rlGroups(everyone);
+  // aucun joueur de l'équipe dans le texte : rien à chercher (le cas de presque toutes les équipes du jour)
+  if(!fuzzy&&!skaters.some(p=>{ const L=key(p).L; return L&&C.one.includes(' '+L+' '); }))
+    return {dressed:new Set(),absent:new Set(),fuzzyHits:[],cut:-1,stop:lines.length,first:-1,last:-1,lines};
+  const hit=(txt,p)=>{
+    const {L,I}=key(p);
+    if(!L||!txt.includes(' '+L+' ')) return false;
+    // homonymes départagés sur les DEUX effectifs (un Pettersson de chaque côté, un seul cité) :
+    // par l'initiale si le texte la donne ; sinon impossible → gardé
+    const grp=G.get(L); if(!grp||grp.length<2||!I) return true;
+    const cited=q=>{ const i=key(q).I; return i&&(txt.includes(' '+L+' '+i+' ')||txt.includes(' '+i+' '+L+' ')); };
+    return cited(p) || !grp.some(cited);
+  };
+  const join=arr=>' '+arr.filter(Boolean).join(' ')+' ';                     // = normTxt du texte joint, sans tout relire
+  // où chaque joueur de l'équipe est cité, ligne par ligne
+  const at=skaters.map(p=>{ const J=[], L=key(p).L; if(!L||!ALL.includes(' '+L+' ')) return J;
+    for(let j=0;j<NL.length;j++) if(hit(NL[j],p)) J.push(j); return J; });
+  const colon=i=>{ const l=lines[i]; return l.includes(':')?l.slice(l.indexOf(':')+1):''; };
+  let cut=-1;
+  for(let i=0;i<lines.length&&cut<0;i++){ if(!ABS_HDR.test(lines[i])) continue;
+    const af=' '+normTxt(colon(i))+' '; let b=0, a=0;
+    skaters.forEach((p,k)=>{ if(at[k].some(j=>j<i)) b++; if(at[k].some(j=>j>i)||hit(af,p)) a++; });
+    if(a<ABS_MAXN||b>a) cut=i; }
   // Le TITRE de la rubrique n'est jamais lu comme un nom (« Injured Reserve », « Day-To-Day »… :
   // un joueur nommé Day ou Reserve serait sinon déclaré absent) ; seul ce qui suit « : » l'est.
-  const hl=cut<0?'':lines[cut], after=hl.includes(':')?hl.slice(hl.indexOf(':')+1):'';
-  const dTxt=' '+normTxt((cut<0?lines:lines.slice(0,cut)).join(' '))+' ', aTxt=' '+normTxt(cut<0?'':[after,...lines.slice(cut+1)].join(' '))+' ';
-  // homonymes départagés sur les DEUX effectifs : un Pettersson de chaque côté, un seul cité
-  const byLast=new Map(); for(const p of everyone){ const L=normTxt(lastOf(p.name)); byLast.set(L,(byLast.get(L)||0)+1); }
-  const hit=(txt,p)=>{
-    const L=normTxt(lastOf(p.name)), I=initOf(p.name);
-    if(!L||!txt.includes(' '+L+' ')) return false;
-    if((byLast.get(L)||0)<2||!I) return true;
-    const cited=q=>{ const i=initOf(q.name); return i&&(txt.includes(' '+L+' '+i+' ')||txt.includes(' '+i+' '+L+' ')); };
-    // homonymes : départagés par l'initiale si le texte la donne ; sinon impossible → gardé
-    return cited(p) || !everyone.some(q=>normTxt(lastOf(q.name))===L&&cited(q));
-  };
+  const after=cut<0?'':colon(cut);
+  let stop=lines.length;
+  if(cut>=0){ let pres=C.pr.get(everyone); if(!pres){ pres=everyone.filter(q=>key(q).L&&ALL.includes(' '+key(q).L+' ')); C.pr.set(everyone,pres); }
+    const mine=new Set(skaters.map(p=>p.id)), oth=pres.filter(q=>!mine.has(q.id));
+    if(oth.length>1) for(let j=cut+1;j<lines.length&&stop===lines.length;j++){ let n=0; for(const q of oth) if(hit(NL[j],q)&&++n>=2) break; if(n>=2) stop=j; } }
+  const dTxt=join(cut<0?n2:n2.slice(0,cut)), aTxt=cut<0?'  ':join([normTxt(after),...n2.slice(cut+1,stop)]);
   const absent=new Set(skaters.filter(p=>hit(aTxt,p)).map(p=>p.id));
   const dressed=new Set(skaters.filter(p=>!absent.has(p.id)&&hit(dTxt,p)).map(p=>p.id));
   const fuzzyHits=[];
   if(fuzzy){
     // mots déjà attribués exactement (aux deux équipes) : jamais réutilisés par la tolérance
-    const taken=new Set(everyone.filter(p=>{ const L=normTxt(lastOf(p.name)); return L&&(dTxt.includes(' '+L+' ')||aTxt.includes(' '+L+' ')); }).map(p=>normTxt(lastOf(p.name))));
+    const taken=new Set(everyone.filter(p=>{ const L=key(p).L; return L&&(dTxt.includes(' '+L+' ')||aTxt.includes(' '+L+' ')); }).map(p=>key(p).L));
     const near=(txt,L)=>{ const toks=txt.trim().split(' '), n=L.split(' ').length, tol=tolFor(L.replace(/ /g,''));
       if(!tol) return false;
       for(let i=0;i+n<=toks.length;i++){ const w=toks.slice(i,i+n).join(' ');
@@ -2506,12 +2544,16 @@ function recognizeLineup(text,skaters,everyone=skaters,fuzzy=false){
       return false; };
     for(const p of skaters){
       if(dressed.has(p.id)||absent.has(p.id)) continue;
-      const L=normTxt(lastOf(p.name)); if(!L||(byLast.get(L)||0)>1) continue;          // homonyme : exact seulement
+      const L=key(p).L; if(!L||(G.get(L)||[]).length>1) continue;          // homonyme : exact seulement
       const wa=near(aTxt,L); if(wa){ absent.add(p.id); fuzzyHits.push([p.name,wa]); continue; }
       const wd=near(dTxt,L); if(wd){ dressed.add(p.id); fuzzyHits.push([p.name,wd]); }
     }
   }
-  return {dressed,absent,fuzzyHits};
+  // lignes utiles pour CETTE équipe : de la première à la dernière où l'un de ses joueurs reconnus est cité (rubrique comprise)
+  let first=-1, last=-1;
+  skaters.forEach((p,k)=>{ if(!dressed.has(p.id)&&!absent.has(p.id)) return; for(const j of at[k]){ if(j>=stop) break; if(first<0||j<first) first=j; if(j>last) last=j; } });
+  if(cut>=0&&first>=0){ first=Math.min(first,cut); last=Math.max(last,cut); }
+  return {dressed,absent,fuzzyHits,cut,stop,first,last,lines};
 }
 const PASTE_MIN=12;                                 // patineurs reconnus pour valoir composition complète
 const escHtml=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -2565,22 +2607,204 @@ async function runOcrFor(G,files){
     const mode=document.querySelector(`[data-pastemode="${G}"]`)?.value||'dressed';
     const r=applyPaste(g,text,mode,true,conf);
     const R=projectGame(g); if(R) S.proj.set(G,R); S.absOpen[G]=true; render();
-    toast(`Image lue (confiance ${Math.round(conf)} %) — ${g.away.abv} ${r.away.n} · ${g.home.abv} ${r.home.n} joueurs reconnus`);
+    toast(pasteToast(g,r,mode,`Image lue (confiance ${Math.round(conf)} %) — `));
   }catch(e){ say('Lecture impossible : '+String(e.message||e)); }
 }
-function applyPaste(g,text,mode,fuzzy=false,conf=null){
-  const res={at:Date.now(),mode,src:fuzzy?'image':'texte',conf};
+// COMPOSITION PAR ÉQUIPE (29/10/2026) — « je fais déjà les copier-coller par équipe ». Chaque côté garde sa propre
+// composition et son heure : une équipe collée seule ne touche plus l'autre (avant, coller WSH effaçait PHI). Une compo
+// complète n'est jamais remplacée par un texte où l'équipe est à peine citée ; une liste d'absents collée ensuite
+// (« le texte liste les absents ») s'ajoute à la compo déjà là. Le texte gardé pour la zone de saisie : tel quel s'il
+// est court, sinon les seules lignes utiles (une page entière ne remplit pas le stockage).
+const PASTE_TXT=4000, PASTE_KEEP_D=10;
+const pzAt=(z,P)=>+(z&&z.at)||+(P&&P.at)||0;
+const pzMode=(z,P)=>(z&&z.mode)||(P&&P.mode)||'dressed';
+const pzRank=z=>!z?-1:(z.applied?2:(((z.dressed||[]).length||(z.absent||[]).length)?1:0));
+function pzNorm(z,P){ return z?{...z,at:pzAt(z,P),mode:pzMode(z,P)}:null; }
+// le côté x l'emporte-t-il sur y ? même décision sur les deux appareils : rang (compo complète > partielle > rien),
+// puis le plus récent, puis le contenu
+function pzBeats(x,y){ const rx=pzRank(x), ry=pzRank(y); if(rx!==ry) return rx>ry; if(x.at!==y.at) return x.at>y.at; return canon(pzLite(x))>=canon(pzLite(y)); }
+function pzText(P){ const T=[]; for(const sd of ['away','home']){ const t=P&&P[sd]&&P[sd].txt; if(t&&!T.includes(t)) T.push(t); }
+  return (T.length?T.join('\n\n'):String(P&&P.text||'')).slice(0,20000); }
+// sans le texte source : ce qui part dans la synchro et sert à comparer (le texte ne sert qu'à l'affichage, ici)
+function pzLite(P){ if(!P||typeof P!=='object') return P; const r={...P}; delete r.text; delete r.txt;
+  for(const sd of ['home','away']) if(r[sd]&&typeof r[sd]==='object'){ const z={...r[sd]}; delete z.txt; r[sd]=z; } return r; }
+function applyPaste(g,text,mode,fuzzy=false,conf=null,opt={}){
+  const now=Date.now(), prev=S.pasted[g.id]||null, only=opt.sides||null, per=opt.per||{};
+  const meta=typeof SAI_META!=='undefined'&&SAI_META?SAI_META['paste:'+g.id]:null;
+  const res={at:now,mode,src:fuzzy?'image':'texte',conf};
+  const clr=Math.max(+(prev&&prev.clr)||0,meta&&meta.del?+meta.mt||0:0); if(clr) res.clr=clr;    // « Retirer » : rien d'avant ne revient
   const everyone=['home','away'].flatMap(sd=>S.teams.get(g[sd].abv)?.skaters||[]);
+  const R={};
+  for(const side of ['home','away']){ if(only&&!only.includes(side)) continue; const T=S.teams.get(g[side].abv);
+    if(T) R[side]=per[side]||recognizeLineup(text,T.skaters,everyone,fuzzy); }
+  // texte gardé : court → tel quel ; long → de la première à la dernière ligne utile des équipes reconnues
+  const raw=String(text||''), U=Object.values(R).filter(r=>r.first>=0);
+  const txt=fuzzy?raw.slice(0,20000):raw.length<=PASTE_TXT||!U.length?raw.slice(0,PASTE_TXT)
+    :U[0].lines.slice(Math.min(...U.map(r=>r.first)),Math.max(...U.map(r=>r.last))+1).join('\n').slice(0,PASTE_TXT);
+  const kept=[], got={};
   for(const side of ['home','away']){
-    const T=S.teams.get(g[side].abv); if(!T){ res[side]={applied:false,dressed:[],absent:[],n:0}; continue; }
-    const r=recognizeLineup(text,T.skaters,everyone,fuzzy);
-    if(mode==='out') res[side]={applied:false,dressed:[],absent:[...r.dressed,...r.absent],n:r.dressed.size+r.absent.size,fz:r.fuzzyHits};
-    else res[side]={applied:r.dressed.size>=PASTE_MIN,dressed:[...r.dressed],absent:[...r.absent],n:r.dressed.size,fz:r.fuzzyHits};
+    const p=prev&&prev[side]?pzNorm(prev[side],prev):null;
+    if(only&&!only.includes(side)){ if(p) res[side]=p; continue; }
+    const r=R[side]; let z;
+    if(!r) z={applied:false,dressed:[],absent:[],n:0};
+    else if(mode==='out') z={applied:false,dressed:[],absent:[...r.dressed,...r.absent],n:r.dressed.size+r.absent.size,fz:r.fuzzyHits};
+    else z={applied:r.dressed.size>=PASTE_MIN,dressed:[...r.dressed],absent:[...r.absent],n:r.dressed.size,fz:r.fuzzyHits};
+    Object.assign(z,{at:now,mode,src:res.src,txt}); if(opt.via) z.via=opt.via; got[side]=z.n;
+    if(p){
+      if(mode==='out'&&z.n&&p.applied){ res[side]={...p,absent:[...new Set([...(p.absent||[]),...z.absent])],at:now}; continue; }
+      if(!z.applied&&(p.applied||pzRank(z)===0)){ res[side]=p; kept.push(side); continue; }       // compo d'avant gardée
+    }
+    res[side]=z;
   }
-  res.text=String(text||'').slice(0,20000);
+  res.text=pzText(res);
   S.pasted[g.id]=res;
   try{ localStorage.setItem('nhlvb_paste',JSON.stringify(S.pasted)); }catch(e){} syncSai();
-  return res;
+  return {...res,kept,got};
+}
+// compte rendu d'un collage dans le cadre du match : un côté gardé est dit gardé (« 18 reconnus » serait sinon celui d'avant)
+function pasteToast(g,r,mode,pre=''){
+  const kept=r.kept||[], got=r.got||{};
+  if(mode==='out') return `${pre}${(got.away||0)+(got.home||0)} absent(s) reconnu(s) — ${g.away.abv} @ ${g.home.abv} recalculé`;
+  const part=sd=>kept.includes(sd)?`${g[sd].abv} : compo d'avant gardée`:`${g[sd].abv} ${got[sd]||0}`, fresh=['away','home'].filter(sd=>!kept.includes(sd));
+  return `${pre}${part('away')} · ${part('home')} joueurs reconnus — ${fresh.length&&fresh.every(sd=>r[sd]?.applied)?'composition appliquée':'vérifie le compte rendu'}`;
+}
+// compos de plus de PASTE_KEEP_D jours : retirées (le relevé du journal garde ce qui a compté) — sans quoi le stockage
+// du navigateur se remplit au fil de la saison ; pas de suppression à propager (elles ont quitté la synchro depuis longtemps)
+function pastePrune(now=Date.now()){
+  const lim=now-PASTE_KEEP_D*864e5; let n=0;
+  for(const [g,v] of Object.entries(S.pasted||{})) if(!v||typeof v!=='object'||(+v.at||0)<lim){ delete S.pasted[g]; if(typeof SAI_META!=='undefined'&&SAI_META) delete SAI_META['paste:'+g]; n++; }
+  if(n){ try{ localStorage.setItem('nhlvb_paste',JSON.stringify(S.pasted)); }catch(e){} if(typeof SAI_META!=='undefined') safeSet(SAI_META_KEY,JSON.stringify(SAI_META)); }
+  return n;
+}
+
+// ENVOI EN UN GESTE (29/10/2026) — « je colle toujours les compositions depuis PuckPedia, il y a aucune alternative ? »
+// La compo d'une équipe (ou de plusieurs : page de match, page de la soirée) collée N'IMPORTE OÙ — Ctrl+V dans la page,
+// bouton « 📋 Coller compo », « Partager » depuis le téléphone — est reconnue par ses joueurs et rangée sur son match : seul le
+// côté reconnu (au moins PASTE_MIN joueurs alignés) change. Un match déjà commencé n'est pas touché : la compo attend
+// alors la journée suivante (▶), comme celle reçue pendant le chargement.
+let COMPO_WAIT=[], COMPO_LAST=null;
+const COMPO_WAIT_H=20;
+// tous les joueurs du jour servent aux homonymes (« Pettersson, E » de VAN n'est pas celui de TOR) et à repérer où
+// commence la compo d'une autre équipe sur une page qui en donne plusieurs
+function compoDetect(text){
+  const out=[], day=(S.games||[]).flatMap(g=>['home','away'].flatMap(sd=>S.teams.get(g[sd].abv)?.skaters||[]));
+  for(const g of S.games||[]){
+    const per={};
+    for(const sd of ['away','home']){ const T=S.teams.get(g[sd].abv); if(T) per[sd]=recognizeLineup(text,T.skaters,day,false); }
+    out.push({g,per,sides:['away','home'].filter(sd=>per[sd]&&per[sd].dressed.size>=PASTE_MIN)});
+  }
+  return out;
+}
+function compoWait(text,via){
+  const now=Date.now(); COMPO_WAIT=COMPO_WAIT.filter(w=>w.text!==text&&now-w.at<COMPO_WAIT_H*3600e3).slice(-9);
+  COMPO_WAIT.push({text,via,at:now});
+}
+function compoReceive(text,via='collage',{quiet=false,fromWait=false}={}){
+  text=String(text||'');
+  const lbl=g=>`${g.away.abv} @ ${g.home.abv}`, dLbl=d=>String(d||'').slice(8,10)+'/'+String(d||'').slice(5,7);
+  if(!S.games.length||$('#load')?.disabled===true){         // journée en cours de chargement : rangée juste après
+    if(!fromWait) compoWait(text,via);
+    const msg='Composition reçue : elle sera rangée sur son match dès la journée chargée';
+    if(!quiet) toast(msg,5000); return {wait:true,msg,done:[],late:[]};
+  }
+  const det=compoDetect(text), done=[], late=[]; let best=null;
+  for(const d of det){
+    for(const sd of ['away','home']){ const n=d.per[sd]?.dressed.size||0; if(n&&(!best||n>best.n)) best={g:d.g,sd,n}; }
+    if(!d.sides.length) continue;
+    if(gameStarted(d.g)){ late.push(d); continue; }
+    applyPaste(d.g,text,'dressed',false,null,{sides:d.sides,via,per:d.per});
+    try{ const R=projectGame(d.g); if(R) S.proj.set(d.g.id,R); }catch(e){ console.warn('compo : recalcul',e); }
+    done.push(d);
+  }
+  const one=(d,sd)=>{ const r=d.per[sd], a=r.absent.size; return `${d.g[sd].abv} ${r.dressed.size} alignés${a?` · ${a} absent${a>1?'s':''}`:''}`; };
+  const nDone=done.reduce((a,d)=>a+d.sides.length,0);
+  let msg;
+  if(done.length) msg=`Compo${nDone>1?'s':''} rangée${nDone>1?'s':''} : `+done.map(d=>`${d.sides.map(sd=>one(d,sd)).join(' + ')} (${lbl(d.g)})`).join(' · ')
+    +(late.length?` — ${late.map(d=>lbl(d.g)).join(', ')} déjà commencé, pas touché`:'');
+  else if(late.length) msg=`${late.map(d=>`${d.sides.map(sd=>d.g[sd].abv).join(' + ')} (${lbl(d.g)})`).join(' · ')} : match déjà commencé — la compo attend la journée suivante (▶)`;
+  else if(best) msg=`Pas de compo complète reconnue : au mieux ${best.n} joueur${best.n>1?'s':''} de ${best.g[best.sd].abv} (il en faut ${PASTE_MIN}) — copie tout le bloc de l'équipe, ou toute la page`;
+  else msg=`Aucun joueur des matchs du ${dLbl(S.date)} dans ce texte — est-ce la bonne journée ?`;
+  if(late.length&&!done.length&&!fromWait) compoWait(text,via);
+  COMPO_LAST={at:Date.now(),via,date:S.date,len:text.length,rangees:done.map(d=>({match:lbl(d.g),cotes:d.sides.map(sd=>({eq:d.g[sd].abv,alignes:d.per[sd].dressed.size,absents:d.per[sd].absent.size}))})),
+    commences:late.map(d=>lbl(d.g)),meilleur:best?{eq:best.g[best.sd].abv,n:best.n}:null,attente:COMPO_WAIT.length};
+  if(done.length) render();
+  if(!quiet||done.length) toast(msg,done.length?6500:9000);
+  return {done,late,best,msg};
+}
+// compos en attente (reçues pendant un chargement, ou pour un match du lendemain) : rangées dès qu'une journée les accueille
+function compoFlush(){
+  if(!COMPO_WAIT.length||!S.games.length) return 0;
+  const W=COMPO_WAIT, now=Date.now(); COMPO_WAIT=[]; let n=0;
+  for(const w of W){ if(now-w.at>COMPO_WAIT_H*3600e3) continue;
+    const r=compoReceive(w.text,w.via,{quiet:true,fromWait:true});
+    if(r.done&&r.done.length) n++; else COMPO_WAIT.push(w); }
+  return n;
+}
+// partage depuis le téléphone : « Partager » une sélection de texte vers l'appli installée (manifeste, share_target)
+// ouvre ./?titre=…&texte=…&lien=… — lu une fois, retiré de l'adresse, rangé une fois la journée chargée
+function shareInRead(){
+  try{ const q=new URLSearchParams(typeof location!=='undefined'&&location.search||'');
+    if(!['texte','titre','lien'].some(k=>q.has(k))) return null;
+    const r={text:q.get('texte')||'',title:q.get('titre')||'',url:q.get('lien')||''};
+    try{ history.replaceState(null,'',location.pathname+location.hash); }catch(e){}
+    return r; }catch(e){ return null; }
+}
+function compoShared(s){
+  if(!s) return null;
+  const body=String(s.text||'').replace(/https?:\/\/\S+/g,' '), words=normTxt(body).split(' ').filter(Boolean).length;
+  if(words<5){
+    const msg=s.url||/https?:\/\//.test(s.text||'')?'Seule l\'adresse de la page est arrivée : sur la page, appui long sur un mot → « Tout sélectionner » → « Partager » → NHL VB'
+      :'Partage reçu, mais sans texte';
+    COMPO_LAST={at:Date.now(),via:'partage',vide:true,titre:String(s.title||'').slice(0,80)}; toast(msg,9000); return {done:[],late:[],msg};
+  }
+  return compoReceive(s.text,'partage');
+}
+// bouton « 📋 Coller compo » : la zone où coller s'ouvre tout de suite ; le presse-papiers, s'il est lisible (autorisation
+// demandée la première fois), y est rangé de lui-même
+const COMPO_READING='Lecture du presse-papiers…';
+async function compoButton(){
+  const can=!!(navigator.clipboard&&navigator.clipboard.readText), bar=compoPanel(can?COMPO_READING:''), out=bar.querySelector('#compoOut');
+  if(!can) return null;
+  let t='';
+  try{ t=await Promise.race([navigator.clipboard.readText(),new Promise((_,no)=>setTimeout(()=>no(new Error('délai')),8000))]); }catch(e){ t=''; }
+  const still=document.body.contains(bar)&&out.textContent===COMPO_READING;      // rien collé à la main entre-temps
+  if(!t||!t.trim()){ if(still) out.textContent=''; return null; }
+  if(!still) return null;
+  const r=compoReceive(t,'bouton',{quiet:true});
+  out.textContent=r.done&&r.done.length||r.wait?r.msg:'Presse-papiers : '+r.msg;
+  return r;
+}
+function compoPanel(msg){
+  let bar=document.getElementById('compoBar');
+  if(!bar){
+    bar=document.createElement('div'); bar.id='compoBar'; bar.className='verdict v-ok compo-bar';
+    bar.innerHTML=`<div class="v-t">COMPO D'UNE ÉQUIPE</div>
+      <div class="v-b">Colle ici la compo copiée (PuckPedia : la page de l'équipe, même entière). L'outil reconnaît l'équipe et la range sur son match ; une équipe à la fois, l'autre reste. Sur PC, Ctrl+V n'importe où dans la page suffit.</div>
+      <textarea id="compoTxt" rows="4" placeholder="Appui long → Coller (ou Ctrl+V)"></textarea>
+      <div class="flex" style="margin-top:6px;gap:6px"><button class="primary" id="compoGo">Ranger sur le match</button><button class="ghost" id="compoClose">Fermer</button></div>
+      <div class="note" id="compoOut"></div>`;
+    const host=document.querySelector('main')||document.body; host.insertBefore(bar,host.firstChild);
+    bar.querySelector('#compoGo').addEventListener('click',()=>{
+      const ta=bar.querySelector('#compoTxt'), v=ta.value;
+      if(!v.trim()){ toast('Colle d\'abord la compo dans la zone'); return; }
+      const r=compoReceive(v,'saisie'); bar.querySelector('#compoOut').textContent=r.msg||'';
+      if(r.done&&r.done.length) ta.value=''; });
+    bar.querySelector('#compoClose').addEventListener('click',()=>bar.remove());
+  }
+  bar.querySelector('#compoOut').textContent=msg||'';
+  try{ bar.scrollIntoView({block:'nearest'}); }catch(e){}
+  try{ bar.querySelector('#compoTxt').focus(); }catch(e){}
+  return bar;
+}
+// Ctrl+V n'importe où (hors champ de saisie) : la compo collée est rangée sur son match
+function compoPasteEvent(e){
+  const t=e.target, tag=t&&t.tagName;
+  if(t&&(t.isContentEditable||tag==='TEXTAREA'||tag==='SELECT'||(tag==='INPUT'&&!/^(checkbox|radio|button|submit|reset|file|range|color|image)$/i.test(t.type||'text')))) return false;
+  const cd=e.clipboardData, txt=cd?(cd.getData('text/plain')||cd.getData('text')||''):'';
+  if(!txt.trim()){
+    if(cd&&[...(cd.files||[])].some(f=>/^image\//.test(f.type))){ e.preventDefault(); toast('Capture d\'écran : colle-la dans le cadre « Composition du soir » du match (Absents du soir)',6000); }
+    return false; }
+  e.preventDefault(); compoReceive(txt,'collage'); return true;
 }
 
 // PRONOSTIC. La question « qui va gagner ? » passe avant « où est la valeur ? » : le vainqueur
@@ -3205,21 +3429,26 @@ function favLine(g,R,pre){
 const luWord=cap=>CFG.src==='espn'?(cap?'Gardiens confirmés':'gardiens confirmés'):(cap?'Compositions confirmées':'compositions confirmées');
 function pasteReport(g){
   const PZ=S.pasted[g.id]; if(!PZ) return '';
-  return ['away','home'].map(sd=>{ const z=PZ[sd], T=S.teams.get(g[sd].abv); if(!z||!T) return '';
+  // deux heures différentes = deux collages (une équipe à la fois) : l'heure de chacun est donnée
+  const times=new Set(['away','home'].filter(sd=>PZ[sd]).map(sd=>pzAt(PZ[sd],PZ)));
+  return ['away','home'].map(sd=>{ const z=PZ[sd], T=S.teams.get(g[sd].abv); if(!T) return '';
+    if(!z) return `<div><b>${g[sd].abv}</b> : pas encore de composition — colle celle de ${g[sd].abv}</div>`;
     const D=new Set(z.dressed), A=new Set(z.absent);
     const out=T.skaters.filter(p=>(z.applied&&!D.has(p.id))||A.has(p.id)).sort((a,b)=>b.toi-a.toi);
-    const head=PZ.mode==='out'?`${z.n} absent(s) reconnu(s)`
+    const head=pzMode(z,PZ)==='out'?`${z.n} absent(s) reconnu(s)`
       : z.applied?`${z.n} joueur(s) alignés reconnus — composition appliquée`
+      : !z.n&&!A.size?`pas encore de composition — colle celle de ${g[sd].abv}`
       : `seulement ${z.n} joueur(s) reconnus — trop peu pour une composition complète (au moins ${PASTE_MIN}) : colle le bloc entier`;
+    const when=times.size>1?` <span class="dimtxt">(${hhmm(pzAt(z,PZ))})</span>`:'';
     const fz=(z.fz||[]).length?` · <span class="dimtxt">lus avec une faute : ${z.fz.map(([n,w])=>`${lastOf(n)} ← « ${escHtml(w)} »`).join(', ')}</span>`:'';
-    return `<div><b>${g[sd].abv}</b> : ${head}${out.length?` · retirés : ${out.slice(0,8).map(p=>lastOf(p.name)).join(', ')}${out.length>8?'…':''}`:''}${fz}</div>`; }).join('')
+    return `<div><b>${g[sd].abv}</b>${when} : ${head}${out.length?` · retirés : ${out.slice(0,8).map(p=>lastOf(p.name)).join(', ')}${out.length>8?'…':''}`:''}${fz}</div>`; }).join('')
     + (PZ.src==='image'?`<div class="dimtxt">Image lue — confiance ${Math.round(PZ.conf||0)} %${(PZ.conf||0)<70?' : <span class="warn">lecture difficile, vérifie le texte ci-dessus ou importe une capture plus nette</span>':''}</div>`:'');
 }
 function pasteBox(g){
   const PZ=S.pasted[g.id];
   return `<div class="paste-box">
-    <div class="dimtxt" style="font-size:11.5px">Composition du soir (Flashscore, NHL.com, DailyFaceoff…) : colle le texte du bloc « Compositions », <b>ou une capture d'écran</b> — les deux équipes ensemble si tu veux :</div>
-    <textarea data-paste="${g.id}" data-fuzzy="${PZ?.src==='image'?1:0}" rows="3" placeholder="Colle ici le texte… ou une capture d'écran (Ctrl+V), ou glisse une image dans ce cadre">${escHtml(PZ?.text||'')}</textarea>
+    <div class="dimtxt" style="font-size:11.5px">Composition du soir (PuckPedia, Flashscore, NHL.com, DailyFaceoff…) : colle le texte, <b>ou une capture d'écran</b> — une équipe à la fois (l'autre reste) ou les deux ensemble. Plus court : Ctrl+V n'importe où dans la page, ou « 📋 Coller compo » en haut, range seul chaque équipe sur son match.</div>
+    <textarea data-paste="${g.id}" data-fuzzy="${PZ?.src==='image'?1:0}" rows="3" placeholder="Colle ici le texte… ou une capture d'écran (Ctrl+V), ou glisse une image dans ce cadre">${escHtml(PZ?pzText(PZ):'')}</textarea>
     <div class="flex" style="gap:6px;margin-top:4px">
       <select data-pastemode="${g.id}"><option value="dressed"${PZ?.mode!=='out'?' selected':''}>le texte liste les joueurs alignés</option><option value="out"${PZ?.mode==='out'?' selected':''}>le texte liste les absents</option></select>
       <button class="primary" data-pasteapply="${g.id}">Appliquer</button>
@@ -3678,7 +3907,7 @@ function renderGames(){
         ${g.type===1?'<span class="pill warn">PRÉ-SAISON · répétition, pas de pari</span>':''}
         ${R.away.b2b?'<span class="pill warn">B2B '+g.away.abv+'</span>':''}
         ${R.home.b2b?'<span class="pill warn">B2B '+g.home.abv+'</span>':''}
-        ${S.pasted[g.id]?`<span class="pill up" title="Composition collée depuis Flashscore / NHL.com / DailyFaceoff">Compo collée ${hhmm(S.pasted[g.id].at)}</span> `:''}${CFG.src==='espn'&&ESPN_OFF[g.id]?.pub?`<span class="pill up" title="Joueurs habillés lus sur la fiche du match ESPN">Compo officielle ${hhmm(ESPN_OFF[g.id].at)}</span> `:''}${lu?`<span class="pill up" title="${CFG.src==='espn'?'Seulement les deux gardiens partants : la composition officielle complète arrive environ 1 h avant le match (Absents du soir).':lu.src.join(' + ')}">${luWord(true)} ${new Date(lu.at).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>`
+        ${S.pasted[g.id]?`<span class="pill up" title="Composition collée (PuckPedia, Flashscore, NHL.com, DailyFaceoff…)">Compo collée ${hhmm(S.pasted[g.id].at)}</span> `:''}${CFG.src==='espn'&&ESPN_OFF[g.id]?.pub?`<span class="pill up" title="Joueurs habillés lus sur la fiche du match ESPN">Compo officielle ${hhmm(ESPN_OFF[g.id].at)}</span> `:''}${lu?`<span class="pill up" title="${CFG.src==='espn'?'Seulement les deux gardiens partants : la composition officielle complète arrive environ 1 h avant le match (Absents du soir).':lu.src.join(' + ')}">${luWord(true)} ${new Date(lu.at).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>`
             :'<span class="pill dimtxt">Compositions non publiées</span>'}
         <button class="ghost" data-lu="${g.id}" style="font-size:11px;padding:3px 8px">Vérifier</button>
       </div>
@@ -3910,8 +4139,7 @@ function bindBetForms(){
     const ta=document.querySelector(`[data-paste="${G}"]`), txt=ta?.value||'', mode=document.querySelector(`[data-pastemode="${G}"]`)?.value||'dressed';
     if(!txt.trim()){ toast('Colle d\'abord la composition (texte ou capture) dans la zone'); return; }
     const r=applyPaste(g,txt,mode,ta?.dataset.fuzzy==='1',ta?.dataset.fuzzy==='1'?S.pasted[G]?.conf:null); const R=projectGame(g); if(R) S.proj.set(G,R); S.absOpen[G]=true; render();
-    toast(mode==='out'?`${(r.home.n||0)+(r.away.n||0)} absent(s) reconnu(s) — ${g.away.abv} @ ${g.home.abv} recalculé`
-      :`${g.away.abv} ${r.away.n} · ${g.home.abv} ${r.home.n} joueurs reconnus — ${[r.away,r.home].every(z=>z.applied)?'composition appliquée':'vérifie le compte rendu'}`);
+    toast(pasteToast(g,r,mode));
   }));
   $$('[data-pasteclear]').forEach(b=>bindOnce(b,'PasteClr')&&b.addEventListener('click',()=>{
     const G=+b.dataset.pasteclear, g=S.games.find(x=>x.id===G); delete S.pasted[G];
@@ -5596,7 +5824,7 @@ function exportJson(){
   const yc=CFG.src==='espn'?espnYear(S.season||'20262027'):null, ck=yc?ESPN_CHECK[yc]:null;
   const diag={version:BUILD,cfgv:CFG.cfgv,newer:S.newerBuild||S.cfgNewer||null,at:new Date().toISOString(),src:CFG.src,date:S.date,games:S.games.length,proj:S.proj.size,
     saisonEnCours:{erreur:S.curErr||null,ignoree:ESPN_CHECK.curRejected||null,controles:ck?{lignes:ck.n,reussis:ck.ok,sur:ck.chk,gardiens:`${ck.gok}/${ck.gchk}`,echecs:ck.fails||null,moyenneEnRetard:ck.lagT??null}:null},
-    forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(),
+    forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(), compos:{dernier:COMPO_LAST,enAttente:COMPO_WAIT.length},
     // pronostic retenu = modèle + marché (09/10/2026) : poids, matchs cotés, matchs ancrés, résimulations
     ancrage:(()=>{ const P=[...S.proj.values()], A=P.filter(R=>R.mkt); return {poids:[CFG.mktW??null,CFG.mktT??null], cotes:Object.keys(S.odds||{}).length, ancres:A.length,
       essais:A.map(R=>R.mkt.it), ecartMax:A.length?+Math.max(...A.map(R=>Math.abs(R.pH-R.mkt.tW))).toFixed(4):null}; })()};
@@ -5702,7 +5930,7 @@ function saiFlat(){
   const F={};
   for(const k of Object.keys(S.picksManual||{})) if(S.picksManual[k]&&S.picks&&S.picks[k]!=null) F['gk:'+k]=S.picks[k];
   for(const [g,v] of Object.entries(S.outManual||{})) if(v&&((v.home||[]).length||(v.away||[]).length)) F['out:'+g]=v;
-  for(const [g,v] of Object.entries(S.pasted||{})) if(v) F['paste:'+g]=v;
+  for(const [g,v] of Object.entries(S.pasted||{})) if(v) F['paste:'+g]=pzLite(v);        // sans le texte source (29/10/2026)
   for(const [k,v] of Object.entries(SCO||{})) if(v) F['sco:'+k]=v;
   return F;
 }
@@ -5760,10 +5988,47 @@ function saiDel(kind,id){
   else if(kind==='out') delete S.outManual[id];
   else if(kind==='paste') delete S.pasted[id];
   else if(kind==='sco') delete SCO[id]; }
+// Composition collée venue de l'autre appareil (29/10/2026) : fusion CÔTÉ PAR CÔTÉ, quel que soit le plus récent des
+// deux enregistrements. Le téléphone a rangé PHI, le PC WSH avant d'avoir reçu PHI : les deux restent, sur les deux
+// appareils. Par côté : une compo complète passe avant un texte partiel, puis la plus récente ; des absents ajoutés
+// ensuite (« le texte liste les absents ») sont réunis à la compo ; « Retirer » (clr) écarte ce qui a été collé avant,
+// d'où qu'il vienne. Le texte source ne voyage pas (affichage seulement) : il est gardé ici quand le côté est le même.
+function pzMerge(L,V,clr=0){
+  const sides={};
+  for(const sd of ['home','away']){
+    const C=[pzNorm(L&&L[sd],L),pzNorm(V&&V[sd],V)].filter(z=>z&&z.at>clr);
+    if(!C.length) continue;
+    let w=C.length>1&&pzBeats(C[1],C[0])?C[1]:C[0];
+    if(w.applied){ const X=C.filter(z=>z!==w&&!z.applied&&z.mode==='out'&&z.at>w.at);
+      if(X.length) w={...w,absent:[...new Set([...(w.absent||[]),...X.flatMap(z=>z.absent||[])])],at:Math.max(w.at,...X.map(z=>z.at))}; }
+    if(!w.txt){ const o=C.find(z=>z!==w&&z.txt&&canon(pzLite(z))===canon(pzLite(w))); if(o) w={...w,txt:o.txt}; }
+    sides[sd]=w;
+  }
+  if(!sides.home&&!sides.away){                       // enregistrement sans côté (ancien format) : le plus récent, tel quel
+    const any=[L,V].filter(P=>P&&typeof P==='object'&&!P.home&&!P.away&&(+P.at||0)>clr).sort((a,b)=>(+b.at||0)-(+a.at||0));
+    return any.length?any[0]:null; }
+  const base=[L,V].filter(Boolean).sort((a,b)=>((+b.at||0)-(+a.at||0))||(canon(pzLite(b))<canon(pzLite(a))?-1:1))[0];
+  const M={}; for(const [k,v] of Object.entries(base)) if(!['home','away','clr'].includes(k)) M[k]=v;
+  Object.assign(M,sides); M.at=Math.max(...Object.values(sides).map(z=>z.at)); if(clr) M.clr=clr;
+  M.text=pzText(M);
+  return M;
+}
+function pasteMergeIn(k,id,r){
+  const L=S.pasted[id]||null, m=SAI_META[k]||null, rm=+r.mt||0, V=!r.del&&r.v&&typeof r.v==='object'?r.v:null;
+  const clr=Math.max(+(L&&L.clr)||0,+(V&&V.clr)||0,m&&m.del?+m.mt||0:0,r.del?rm:0);
+  const M=pzMerge(L,V,clr), cs=x=>canon(pzLite(x)||null);
+  let ch=false;
+  if(cs(M)!==cs(L)){ if(M) S.pasted[id]=M; else delete S.pasted[id]; ch=true; }
+  if(!M){ const mt=Math.max(+(m&&m.mt)||0,rm); if(!(m&&m.del&&(+m.mt||0)===mt)){ SAI_META[k]={del:1,mt}; } }
+  else if(cs(M)===cs(V)) SAI_META[k]={h:hStr(canon(pzLite(M))),mt:rm};
+  else if(ch) SAI_META[k]={h:hStr(canon(pzLite(M))),mt:Math.max(Date.now(),rm+1,(+(m&&m.mt)||0)+1)};
+  return ch;
+}
 function mergeSaisies(obj){
   const I=obj&&obj.items||{}, games=new Set(); let ch=false;
   for(const [k,r] of Object.entries(I)){ if(!r||typeof r!=='object') continue; const p=k.indexOf(':'); if(p<1) continue;
     const kind=k.slice(0,p), id=k.slice(p+1); if(!['gk','out','paste','sco'].includes(kind)) continue;
+    if(kind==='paste'){ if(pasteMergeIn(k,id,r)){ ch=true; games.add(id); } continue; }     // côté par côté, quel que soit le plus récent
     if((+r.mt||0)<=(+(SAI_META[k]&&SAI_META[k].mt)||0)) continue;                 // le nôtre est aussi récent
     if(r.del){ saiDel(kind,id); SAI_META[k]={del:1,mt:+r.mt||0}; }
     else{ saiSet(kind,id,r.v); SAI_META[k]={h:hStr(canon(r.v)),mt:+r.mt||0}; }
@@ -6096,6 +6361,7 @@ async function go(d,fresh=false){
   }
   finally{ $('#load').disabled=false; fillCfg(); }
   if(S.games.length && !S.loadError) setStatus($('#status').textContent+' · via '+S.via);
+  try{ compoFlush(); }catch(e){ console.warn('compos en attente',e); }          // reçues pendant le chargement, ou pour ce jour-là
   if(S.games.length){
     startWatcher();
     await refreshLineups(null,{quiet:true});
@@ -6358,6 +6624,10 @@ $('#clearCache').addEventListener('click',()=>{Object.keys(localStorage).filter(
 { const b=$('#buildTag'); if(b) b.textContent=`version du ${buildLbl(false)}`; }
 loadCfg(); loadLog(); $('#btFrom').value=localStorage.getItem('nhlvb_from')||''; renderBt();
 syncBind(); pwaRegister();
+pastePrune();
+const SHARE_IN=shareInRead();                     // « Partager » depuis le téléphone (29/10/2026)
+document.addEventListener('paste',compoPasteEvent);  // Ctrl+V n'importe où dans la page : la compo va sur son match
+{ const b=$('#compoBtn'); if(b) b.addEventListener('click',()=>{ compoButton(); }); }
 $('#gateLU').checked=CFG.gateLineups!==false;
 $('#date').value=todayISO();
 $('#oddsKey').value=localStorage.getItem('nhlvb_oddskey')||DEFAULT_ODDS_KEY;
@@ -6380,6 +6650,7 @@ $('#autoLU').addEventListener('change',async()=>{
     if(last){ $('#date').value=last; await go(last); }
     else setStatus('Aucune journée trouvée — vérifie ta connexion ou renseigne un proxy CORS');
   }
+  if(SHARE_IN) compoShared(SHARE_IN);
 })();
 </script>
 </body>

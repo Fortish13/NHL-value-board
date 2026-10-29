@@ -347,7 +347,7 @@ tr.row-t1 td{background:rgba(73,209,127,.05)}
     <button class="primary" id="load">Charger la journée</button>
     <button class="ghost" id="reload" title="Ignorer le cache et recharger">↻ Forcer</button>
     <button class="ghost" id="lineupsBtn" title="Vérifier maintenant les gardiens annoncés et les compositions">Compositions</button>
-    <button class="ghost" id="compoBtn" title="Range sur son match la compo d'une équipe copiée (PuckPedia, même la page entière). Sur PC, Ctrl+V n'importe où dans la page fait la même chose ; sur le téléphone, « Partager » vers l'appli installée.">📋 Coller compo</button>
+    <button class="ghost" id="compoBtn" title="Range sur son match la compo d'une équipe copiée — texte (PuckPedia, même la page entière) ou capture d'écran. Sur PC, Ctrl+V n'importe où dans la page fait la même chose ; sur le téléphone, « Partager » vers l'appli installée.">📋 Coller compo</button>
     <label class="chk autolu" id="autoLUlbl" title="Vérifie seul les compositions des matchs qui commencent dans les 6 heures, toutes les N minutes (réglable dans Réglages). La page doit rester ouverte."><input type="checkbox" id="autoLU"> Vérif. auto <span id="autoLUinfo" class="dimtxt"></span></label>
     <div>
       <div class="status" id="status">Prêt.</div>
@@ -576,6 +576,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
 const BUILD='2026-10-29';
+const BUILD_REV=2;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
 const S = {
@@ -2528,7 +2529,12 @@ function recognizeLineup(text,skaters,everyone=skaters,fuzzy=false){
   let stop=lines.length;
   if(cut>=0){ let pres=C.pr.get(everyone); if(!pres){ pres=everyone.filter(q=>key(q).L&&ALL.includes(' '+key(q).L+' ')); C.pr.set(everyone,pres); }
     const mine=new Set(skaters.map(p=>p.id)), oth=pres.filter(q=>!mine.has(q.id));
-    if(oth.length>1) for(let j=cut+1;j<lines.length&&stop===lines.length;j++){ let n=0; for(const q of oth) if(hit(NL[j],q)&&++n>=2) break; if(n>=2) stop=j; } }
+    // chaque nom n'est compté qu'une fois, les plus longs d'abord (« ekman larsson » avant l'« ekman » d'une autre équipe)
+    const byLen=(x,y)=>key(y).L.length-key(x).L.length, own=skaters.filter(p=>key(p).L).sort(byLen).map(p=>key(p).L), othL=oth.slice().sort(byLen);
+    if(othL.length>1) for(let j=cut+1;j<lines.length&&stop===lines.length;j++){ let ln=NL[j];
+      for(const L of own) while(ln.includes(' '+L+' ')) ln=ln.replace(' '+L+' ',' ');
+      let n=0; for(const q of othL) if(hit(ln,q)){ ln=ln.replace(' '+key(q).L+' ',' '); if(++n>=2) break; }
+      if(n>=2) stop=j; } }
   const dTxt=join(cut<0?n2:n2.slice(0,cut)), aTxt=cut<0?'  ':join([normTxt(after),...n2.slice(cut+1,stop)]);
   const absent=new Set(skaters.filter(p=>hit(aTxt,p)).map(p=>p.id));
   const dressed=new Set(skaters.filter(p=>!absent.has(p.id)&&hit(dTxt,p)).map(p=>p.id));
@@ -2605,6 +2611,7 @@ async function runOcrFor(G,files){
   try{
     const {text,conf}=await ocrImages(files,say);
     const mode=document.querySelector(`[data-pastemode="${G}"]`)?.value||'dressed';
+    if(mode!=='out'){ const rr=compoElsewhere(g,text,true,conf); if(rr&&rr.done&&rr.done.length){ say(''); S.absOpen[G]=true; render(); return; } }   // capture d'un autre match
     const r=applyPaste(g,text,mode,true,conf);
     const R=projectGame(g); if(R) S.proj.set(G,R); S.absOpen[G]=true; render();
     toast(pasteToast(g,r,mode,`Image lue (confiance ${Math.round(conf)} %) — `));
@@ -2685,34 +2692,41 @@ function pastePrune(now=Date.now()){
 let COMPO_WAIT=[], COMPO_LAST=null;
 const COMPO_WAIT_H=20;
 // tous les joueurs du jour servent aux homonymes (« Pettersson, E » de VAN n'est pas celui de TOR) et à repérer où
-// commence la compo d'une autre équipe sur une page qui en donne plusieurs
-function compoDetect(text){
+// commence la compo d'une autre équipe sur une page qui en donne plusieurs. Texte lu sur une CAPTURE (fuzzy) : initiales
+// collées détachées, et la tolérance aux fautes de lecture réservée aux équipes déjà bien présentes (au moins 4 noms
+// exacts) — moins de faux rapprochements, moins de calcul.
+function compoDetect(text,fuzzy=false){
   const out=[], day=(S.games||[]).flatMap(g=>['home','away'].flatMap(sd=>S.teams.get(g[sd].abv)?.skaters||[]));
+  const t0=fuzzy?ocrFix(text):text;
   for(const g of S.games||[]){
     const per={};
-    for(const sd of ['away','home']){ const T=S.teams.get(g[sd].abv); if(T) per[sd]=recognizeLineup(text,T.skaters,day,false); }
+    for(const sd of ['away','home']){ const T=S.teams.get(g[sd].abv); if(!T) continue;
+      let r=recognizeLineup(t0,T.skaters,day,false);
+      if(fuzzy&&r.dressed.size>=4) r=recognizeLineup(text,T.skaters,day,true);
+      per[sd]=r; }
     out.push({g,per,sides:['away','home'].filter(sd=>per[sd]&&per[sd].dressed.size>=PASTE_MIN)});
   }
   return out;
 }
-function compoWait(text,via){
+function compoWait(text,via,fuzzy=false,conf=null){
   const now=Date.now(); COMPO_WAIT=COMPO_WAIT.filter(w=>w.text!==text&&now-w.at<COMPO_WAIT_H*3600e3).slice(-9);
-  COMPO_WAIT.push({text,via,at:now});
+  COMPO_WAIT.push({text,via,at:now,fuzzy,conf});
 }
-function compoReceive(text,via='collage',{quiet=false,fromWait=false}={}){
+function compoReceive(text,via='collage',{quiet=false,fromWait=false,fuzzy=false,conf=null,pre=''}={}){
   text=String(text||'');
   const lbl=g=>`${g.away.abv} @ ${g.home.abv}`, dLbl=d=>String(d||'').slice(8,10)+'/'+String(d||'').slice(5,7);
+  const cap=fuzzy?`Capture lue (confiance ${Math.round(conf||0)} %) — `:'';
   if(!S.games.length||$('#load')?.disabled===true){         // journée en cours de chargement : rangée juste après
-    if(!fromWait) compoWait(text,via);
-    const msg='Composition reçue : elle sera rangée sur son match dès la journée chargée';
+    if(!fromWait) compoWait(text,via,fuzzy,conf);
+    const msg=pre+cap+'Composition reçue : elle sera rangée sur son match dès la journée chargée';
     if(!quiet) toast(msg,5000); return {wait:true,msg,done:[],late:[]};
   }
-  const det=compoDetect(text), done=[], late=[]; let best=null;
+  const det=compoDetect(text,fuzzy), done=[], late=[]; let best=null;
   for(const d of det){
     for(const sd of ['away','home']){ const n=d.per[sd]?.dressed.size||0; if(n&&(!best||n>best.n)) best={g:d.g,sd,n}; }
     if(!d.sides.length) continue;
     if(gameStarted(d.g)){ late.push(d); continue; }
-    applyPaste(d.g,text,'dressed',false,null,{sides:d.sides,via,per:d.per});
+    applyPaste(d.g,text,'dressed',fuzzy,conf,{sides:d.sides,via,per:d.per});
     try{ const R=projectGame(d.g); if(R) S.proj.set(d.g.id,R); }catch(e){ console.warn('compo : recalcul',e); }
     done.push(d);
   }
@@ -2722,10 +2736,12 @@ function compoReceive(text,via='collage',{quiet=false,fromWait=false}={}){
   if(done.length) msg=`Compo${nDone>1?'s':''} rangée${nDone>1?'s':''} : `+done.map(d=>`${d.sides.map(sd=>one(d,sd)).join(' + ')} (${lbl(d.g)})`).join(' · ')
     +(late.length?` — ${late.map(d=>lbl(d.g)).join(', ')} déjà commencé, pas touché`:'');
   else if(late.length) msg=`${late.map(d=>`${d.sides.map(sd=>d.g[sd].abv).join(' + ')} (${lbl(d.g)})`).join(' · ')} : match déjà commencé — la compo attend la journée suivante (▶)`;
-  else if(best) msg=`Pas de compo complète reconnue : au mieux ${best.n} joueur${best.n>1?'s':''} de ${best.g[best.sd].abv} (il en faut ${PASTE_MIN}) — copie tout le bloc de l'équipe, ou toute la page`;
-  else msg=`Aucun joueur des matchs du ${dLbl(S.date)} dans ce texte — est-ce la bonne journée ?`;
-  if(late.length&&!done.length&&!fromWait) compoWait(text,via);
-  COMPO_LAST={at:Date.now(),via,date:S.date,len:text.length,rangees:done.map(d=>({match:lbl(d.g),cotes:d.sides.map(sd=>({eq:d.g[sd].abv,alignes:d.per[sd].dressed.size,absents:d.per[sd].absent.size}))})),
+  else if(best) msg=`Pas de compo complète reconnue : au mieux ${best.n} joueur${best.n>1?'s':''} de ${best.g[best.sd].abv} (il en faut ${PASTE_MIN}) — ${fuzzy?'capture trop petite ou peu lisible : prends tout le bloc, bien net':'copie tout le bloc de l\'équipe, ou toute la page'}`;
+  else msg=`Aucun joueur des matchs du ${dLbl(S.date)} dans ${fuzzy?'cette capture':'ce texte'} — est-ce la bonne journée ?`;
+  msg=pre+cap+msg;
+  if(late.length&&!done.length&&!fromWait) compoWait(text,via,fuzzy,conf);
+  COMPO_LAST={at:Date.now(),via,date:S.date,len:text.length,image:fuzzy||undefined,conf:fuzzy?Math.round(conf||0):undefined,
+    rangees:done.map(d=>({match:lbl(d.g),cotes:d.sides.map(sd=>({eq:d.g[sd].abv,alignes:d.per[sd].dressed.size,absents:d.per[sd].absent.size}))})),
     commences:late.map(d=>lbl(d.g)),meilleur:best?{eq:best.g[best.sd].abv,n:best.n}:null,attente:COMPO_WAIT.length};
   if(done.length) render();
   if(!quiet||done.length) toast(msg,done.length?6500:9000);
@@ -2736,9 +2752,43 @@ function compoFlush(){
   if(!COMPO_WAIT.length||!S.games.length) return 0;
   const W=COMPO_WAIT, now=Date.now(); COMPO_WAIT=[]; let n=0;
   for(const w of W){ if(now-w.at>COMPO_WAIT_H*3600e3) continue;
-    const r=compoReceive(w.text,w.via,{quiet:true,fromWait:true});
+    const r=compoReceive(w.text,w.via,{quiet:true,fromWait:true,fuzzy:!!w.fuzzy,conf:w.conf??null});
     if(r.done&&r.done.length) n++; else COMPO_WAIT.push(w); }
   return n;
+}
+// collée dans le cadre d'un AUTRE match (29/10/2026) : si les équipes de ce match n'y sont pas (moins de 4 noms) et
+// qu'un autre match s'y reconnaît, la compo va sur le sien — et on le dit
+function compoElsewhere(g,text,fuzzy=false,conf=null){
+  const ev=['home','away'].flatMap(sd=>S.teams.get(g[sd].abv)?.skaters||[]);
+  const mine=Math.max(0,...['home','away'].map(sd=>{ const T=S.teams.get(g[sd].abv); return T?recognizeLineup(text,T.skaters,ev,fuzzy).dressed.size:0; }));
+  if(mine>=4) return null;
+  if(!compoDetect(text,fuzzy).some(d=>d.g.id!==g.id&&d.sides.length)) return null;
+  return compoReceive(text,'cadre',{quiet:true,fuzzy,conf,pre:`Pas la compo de ${g.away.abv} @ ${g.home.abv} — `});
+}
+// CAPTURES D'ÉCRAN collées n'importe où, ou importées (29/10/2026, 2e livraison — « il n'a pas fait la correspondance sans
+// aller chercher le match ») : lues dans le navigateur, par le même moteur que le cadre du match, puis rangées comme un
+// texte — chaque équipe reconnue sur son match ; plusieurs captures d'un coup.
+let COMPO_OCR_BUSY=false;
+function compoBusy(msg){
+  let el=document.getElementById('compoBusy');
+  if(msg==null){ if(el) el.remove(); return null; }
+  if(!el){ el=document.createElement('div'); el.id='compoBusy'; el.className='toast'; document.body.appendChild(el); }
+  el.textContent=msg; return el;
+}
+async function compoImages(files,via='collage'){
+  files=[...(files||[])].filter(f=>f&&/^image\//.test(f.type)); if(!files.length) return null;
+  if(COMPO_OCR_BUSY){ toast('Une capture est déjà en cours de lecture — un instant'); return null; }
+  COMPO_OCR_BUSY=true;
+  const n=files.length, say=t=>compoBusy(`Lecture ${n>1?`des ${n} captures`:'de la capture'} : ${t}`);
+  say(OCR_WORKER?'…':'premier usage, téléchargement du moteur de lecture (~10 Mo, une seule fois)…');
+  try{
+    const {text,conf}=await ocrImages(files,say);
+    compoBusy(null);
+    const r=compoReceive(text,via,{fuzzy:true,conf});
+    const out=document.querySelector('#compoBar #compoOut'); if(out) out.textContent=r.msg||'';
+    return r;
+  }catch(e){ compoBusy(null); toast('Lecture de la capture impossible : '+String(e&&e.message||e).slice(0,90),7000); return null; }
+  finally{ COMPO_OCR_BUSY=false; }
 }
 // partage depuis le téléphone : « Partager » une sélection de texte vers l'appli installée (manifeste, share_target)
 // ouvre ./?titre=…&texte=…&lien=… — lu une fois, retiré de l'adresse, rangé une fois la journée chargée
@@ -2760,16 +2810,21 @@ function compoShared(s){
   return compoReceive(s.text,'partage');
 }
 // bouton « 📋 Coller compo » : la zone où coller s'ouvre tout de suite ; le presse-papiers, s'il est lisible (autorisation
-// demandée la première fois), y est rangé de lui-même
+// demandée la première fois), y est rangé de lui-même — texte, ou à défaut capture d'écran
 const COMPO_READING='Lecture du presse-papiers…';
 async function compoButton(){
   const can=!!(navigator.clipboard&&navigator.clipboard.readText), bar=compoPanel(can?COMPO_READING:''), out=bar.querySelector('#compoOut');
   if(!can) return null;
-  let t='';
-  try{ t=await Promise.race([navigator.clipboard.readText(),new Promise((_,no)=>setTimeout(()=>no(new Error('délai')),8000))]); }catch(e){ t=''; }
+  const late=()=>new Promise((_,no)=>setTimeout(()=>no(new Error('délai')),8000));
+  let t='', img=null;
+  try{ t=await Promise.race([navigator.clipboard.readText(),late()]); }catch(e){ t=''; }
+  if((!t||!t.trim())&&navigator.clipboard.read){
+    try{ const items=await Promise.race([navigator.clipboard.read(),late()]);
+      for(const it of items||[]){ const ty=(it.types||[]).find(x=>/^image\//.test(x)); if(ty){ const b=await it.getType(ty); img=new File([b],'capture.'+(ty.split('/')[1]||'png'),{type:ty}); break; } } }catch(e){ img=null; } }
   const still=document.body.contains(bar)&&out.textContent===COMPO_READING;      // rien collé à la main entre-temps
-  if(!t||!t.trim()){ if(still) out.textContent=''; return null; }
   if(!still) return null;
+  if(img){ out.textContent='Capture trouvée dans le presse-papiers : lecture…'; return compoImages([img],'bouton'); }
+  if(!t||!t.trim()){ out.textContent=''; return null; }
   const r=compoReceive(t,'bouton',{quiet:true});
   out.textContent=r.done&&r.done.length||r.wait?r.msg:'Presse-papiers : '+r.msg;
   return r;
@@ -2779,16 +2834,23 @@ function compoPanel(msg){
   if(!bar){
     bar=document.createElement('div'); bar.id='compoBar'; bar.className='verdict v-ok compo-bar';
     bar.innerHTML=`<div class="v-t">COMPO D'UNE ÉQUIPE</div>
-      <div class="v-b">Colle ici la compo copiée (PuckPedia : la page de l'équipe, même entière). L'outil reconnaît l'équipe et la range sur son match ; une équipe à la fois, l'autre reste. Sur PC, Ctrl+V n'importe où dans la page suffit.</div>
-      <textarea id="compoTxt" rows="4" placeholder="Appui long → Coller (ou Ctrl+V)"></textarea>
-      <div class="flex" style="margin-top:6px;gap:6px"><button class="primary" id="compoGo">Ranger sur le match</button><button class="ghost" id="compoClose">Fermer</button></div>
+      <div class="v-b">Colle ici la compo copiée : du texte (PuckPedia : la page de l'équipe, même entière) ou une capture d'écran. L'outil reconnaît l'équipe et la range sur son match ; une équipe à la fois, l'autre reste. Sur PC, Ctrl+V n'importe où dans la page suffit.</div>
+      <textarea id="compoTxt" rows="4" placeholder="Appui long → Coller (ou Ctrl+V) — texte ou capture"></textarea>
+      <div class="flex" style="margin-top:6px;gap:6px"><button class="primary" id="compoGo">Ranger sur le match</button><label class="ghost btnlike" title="Captures d'écran des compos (une ou plusieurs à la fois), lues dans le navigateur">Importer des captures <input type="file" accept="image/*" multiple id="compoFile" style="display:none"></label><button class="ghost" id="compoClose">Fermer</button></div>
       <div class="note" id="compoOut"></div>`;
     const host=document.querySelector('main')||document.body; host.insertBefore(bar,host.firstChild);
+    const ta=bar.querySelector('#compoTxt');
     bar.querySelector('#compoGo').addEventListener('click',()=>{
-      const ta=bar.querySelector('#compoTxt'), v=ta.value;
+      const v=ta.value;
       if(!v.trim()){ toast('Colle d\'abord la compo dans la zone'); return; }
       const r=compoReceive(v,'saisie'); bar.querySelector('#compoOut').textContent=r.msg||'';
       if(r.done&&r.done.length) ta.value=''; });
+    // une capture collée ou glissée dans la zone, ou importée : lue puis rangée
+    ta.addEventListener('paste',e=>{ const cd=e.clipboardData, fs=[...(cd?.files||[])].filter(f=>/^image\//.test(f.type));
+      if(fs.length&&!(cd.getData('text/plain')||'').trim()){ e.preventDefault(); compoImages(fs,'saisie'); } });
+    bar.addEventListener('dragover',e=>{ e.preventDefault(); });
+    bar.addEventListener('drop',e=>{ const fs=[...(e.dataTransfer?.files||[])].filter(f=>/^image\//.test(f.type)); if(fs.length){ e.preventDefault(); compoImages(fs,'saisie'); } });
+    bar.querySelector('#compoFile').addEventListener('change',e=>{ const fs=e.target.files; if(fs&&fs.length) compoImages(fs,'saisie'); e.target.value=''; });
     bar.querySelector('#compoClose').addEventListener('click',()=>bar.remove());
   }
   bar.querySelector('#compoOut').textContent=msg||'';
@@ -2796,15 +2858,19 @@ function compoPanel(msg){
   try{ bar.querySelector('#compoTxt').focus(); }catch(e){}
   return bar;
 }
-// Ctrl+V n'importe où (hors champ de saisie) : la compo collée est rangée sur son match
+// Ctrl+V n'importe où : la compo collée — texte ou capture d'écran — est rangée sur son match. Une zone de texte (cadre
+// du match, zone de collage) garde son collage ; un champ d'une ligne aussi, sauf pour une page entière ou une image,
+// qui n'y ont rien à faire.
 function compoPasteEvent(e){
-  const t=e.target, tag=t&&t.tagName;
-  if(t&&(t.isContentEditable||tag==='TEXTAREA'||tag==='SELECT'||(tag==='INPUT'&&!/^(checkbox|radio|button|submit|reset|file|range|color|image)$/i.test(t.type||'text')))) return false;
-  const cd=e.clipboardData, txt=cd?(cd.getData('text/plain')||cd.getData('text')||''):'';
-  if(!txt.trim()){
-    if(cd&&[...(cd.files||[])].some(f=>/^image\//.test(f.type))){ e.preventDefault(); toast('Capture d\'écran : colle-la dans le cadre « Composition du soir » du match (Absents du soir)',6000); }
-    return false; }
-  e.preventDefault(); compoReceive(txt,'collage'); return true;
+  const t=e.target, tag=t&&t.tagName, cd=e.clipboardData;
+  if(t&&(t.isContentEditable||tag==='TEXTAREA')) return false;
+  const txt=cd?(cd.getData('text/plain')||cd.getData('text')||''):'', imgs=[...(cd&&cd.files||[])].filter(f=>/^image\//.test(f.type));
+  const field=t&&(tag==='SELECT'||(tag==='INPUT'&&!/^(checkbox|radio|button|submit|reset|file|range|color|image)$/i.test(t.type||'text')));
+  const page=txt.includes('\n')&&txt.length>200;
+  if(field&&!page&&!(imgs.length&&!txt.trim())) return false;
+  if(txt.trim()){ e.preventDefault(); compoReceive(txt,'collage'); return true; }
+  if(imgs.length){ e.preventDefault(); compoImages(imgs,'collage'); return true; }
+  return false;
 }
 
 // PRONOSTIC. La question « qui va gagner ? » passe avant « où est la valeur ? » : le vainqueur
@@ -3447,7 +3513,7 @@ function pasteReport(g){
 function pasteBox(g){
   const PZ=S.pasted[g.id];
   return `<div class="paste-box">
-    <div class="dimtxt" style="font-size:11.5px">Composition du soir (PuckPedia, Flashscore, NHL.com, DailyFaceoff…) : colle le texte, <b>ou une capture d'écran</b> — une équipe à la fois (l'autre reste) ou les deux ensemble. Plus court : Ctrl+V n'importe où dans la page, ou « 📋 Coller compo » en haut, range seul chaque équipe sur son match.</div>
+    <div class="dimtxt" style="font-size:11.5px">Composition du soir (PuckPedia, Flashscore, NHL.com, DailyFaceoff…) : colle le texte, <b>ou une capture d'écran</b> — une équipe à la fois (l'autre reste) ou les deux ensemble. Plus court : Ctrl+V n'importe où dans la page — texte ou capture —, ou « 📋 Coller compo » en haut, range seul chaque équipe sur son match.</div>
     <textarea data-paste="${g.id}" data-fuzzy="${PZ?.src==='image'?1:0}" rows="3" placeholder="Colle ici le texte… ou une capture d'écran (Ctrl+V), ou glisse une image dans ce cadre">${escHtml(PZ?pzText(PZ):'')}</textarea>
     <div class="flex" style="gap:6px;margin-top:4px">
       <select data-pastemode="${g.id}"><option value="dressed"${PZ?.mode!=='out'?' selected':''}>le texte liste les joueurs alignés</option><option value="out"${PZ?.mode==='out'?' selected':''}>le texte liste les absents</option></select>
@@ -4138,6 +4204,7 @@ function bindBetForms(){
     const G=+b.dataset.pasteapply, g=S.games.find(x=>x.id===G); if(!g) return;
     const ta=document.querySelector(`[data-paste="${G}"]`), txt=ta?.value||'', mode=document.querySelector(`[data-pastemode="${G}"]`)?.value||'dressed';
     if(!txt.trim()){ toast('Colle d\'abord la composition (texte ou capture) dans la zone'); return; }
+    if(mode!=='out'){ const fz=ta?.dataset.fuzzy==='1', rr=compoElsewhere(g,txt,fz,fz?S.pasted[G]?.conf:null); if(rr&&rr.done&&rr.done.length){ S.absOpen[G]=true; render(); return; } }   // compo d'un autre match
     const r=applyPaste(g,txt,mode,ta?.dataset.fuzzy==='1',ta?.dataset.fuzzy==='1'?S.pasted[G]?.conf:null); const R=projectGame(g); if(R) S.proj.set(G,R); S.absOpen[G]=true; render();
     toast(pasteToast(g,r,mode));
   }));
@@ -5822,7 +5889,7 @@ function saveCfg(){
 function exportJson(){
   // diagnostics (06/10/2026) : ce qui aidait à comprendre un problème et demandait une capture d'écran
   const yc=CFG.src==='espn'?espnYear(S.season||'20262027'):null, ck=yc?ESPN_CHECK[yc]:null;
-  const diag={version:BUILD,cfgv:CFG.cfgv,newer:S.newerBuild||S.cfgNewer||null,at:new Date().toISOString(),src:CFG.src,date:S.date,games:S.games.length,proj:S.proj.size,
+  const diag={version:BUILD,rev:BUILD_REV,cfgv:CFG.cfgv,newer:S.newerBuild||S.cfgNewer||null,at:new Date().toISOString(),src:CFG.src,date:S.date,games:S.games.length,proj:S.proj.size,
     saisonEnCours:{erreur:S.curErr||null,ignoree:ESPN_CHECK.curRejected||null,controles:ck?{lignes:ck.n,reussis:ck.ok,sur:ck.chk,gardiens:`${ck.gok}/${ck.gchk}`,echecs:ck.fails||null,moyenneEnRetard:ck.lagT??null}:null},
     forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(), compos:{dernier:COMPO_LAST,enAttente:COMPO_WAIT.length},
     // pronostic retenu = modèle + marché (09/10/2026) : poids, matchs cotés, matchs ancrés, résimulations
@@ -6621,7 +6688,7 @@ $('#saveCfg').addEventListener('click',saveCfg);
 $('#resetCfg').addEventListener('click',()=>{CFG={...DEF,cfgv:CFG_VERSION};S.cfgNewer=0;safeSet('nhlvb_cfg',JSON.stringify(CFG));cfgTouched();fillCfg();toast('Réglages par défaut');});
 $('#clearCache').addEventListener('click',()=>{Object.keys(localStorage).filter(k=>k.startsWith('nhlvb::')||k.startsWith('nhlvb_str')).forEach(k=>localStorage.removeItem(k));MEM.clear();fillCfg();toast('Cache vidé');});
 
-{ const b=$('#buildTag'); if(b) b.textContent=`version du ${buildLbl(false)}`; }
+{ const b=$('#buildTag'); if(b) b.textContent=`version du ${buildLbl(false)}${BUILD_REV>1?` (${BUILD_REV})`:''}`; }
 loadCfg(); loadLog(); $('#btFrom').value=localStorage.getItem('nhlvb_from')||''; renderBt();
 syncBind(); pwaRegister();
 pastePrune();

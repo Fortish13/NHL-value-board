@@ -325,6 +325,7 @@ tr.row-t1 td{background:rgba(73,209,127,.05)}
 .sync-qr svg{display:block;width:240px;height:240px;max-width:70vw;max-height:70vw}
 .sync-linkbar{margin:10px 16px}
 /* compo d'une équipe collée n'importe où (29/10/2026) */
+.odds-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;font-size:12px} .odds-bar select{font-size:12px;padding:2px 4px}
 .compo-bar{margin:10px 16px} .compo-bar textarea{width:100%;box-sizing:border-box;font-size:12px;margin-top:6px;background:transparent;color:inherit;border:1px solid var(--line2);border-radius:4px;padding:6px}
 .sync-wide{grid-column:span 2} @media(max-width:980px){.sync-wide{grid-column:auto}}
 .sync-help ol{margin:6px 0 0 18px;padding:0} .sync-help li{margin:4px 0}
@@ -482,7 +483,7 @@ tr.row-t1 td{background:rgba(73,209,127,.05)}
         <label class="f">Impact des absents (0 = ignoré) <input type="number" id="c_avail" min="0" max="1" step="0.05"></label>
         <label class="f">Surveillance des compositions <select id="c_watch"><option value="1">Activée</option><option value="0">Désactivée</option></select></label>
         <label class="f">Intervalle de vérification (min) <input type="number" id="c_poll" min="2" max="60"></label>
-        <label class="f" title="Au chargement d'une journée, puis après chaque composition confirmée (au plus toutes les 10 min). Chaque appel consomme des crédits The Odds API.">Cotes automatiques (chargement + compos) <select id="c_auto"><option value="1">Oui</option><option value="0">Non</option></select></label>
+        <label class="f" title="Automatique : au chargement de la page et après chaque gardien confirmé (au plus toutes les 10 min), dans le budget du jour. Une fois par jour : la première récupération de la journée, puis quand tu cliques. Manuel : seulement quand tu cliques (2 crédits). Les cotes relevées restent affichées toute la journée ; celles de l'autre appareil arrivent par la synchro. Aussi sur la ligne « Cotes » en haut de Score prédit et de Matchs.">Rafraîchissement des cotes <select id="c_auto"><option value="auto">automatique</option><option value="jour">une fois par jour</option><option value="manuel">manuel</option></select></label>
       </div>
       <div class="sec" style="margin-top:18px">Situations de jeu</div>
       <label class="chk"><input type="checkbox" id="c_str"> Séparer jeu normal et supériorité numérique (patineurs, infériorité adverse, SV% à forces égales)</label>
@@ -527,7 +528,7 @@ const DEF = {
   topn:12, lineup:18, shrink:0.15, line:5.5, proxy:'',
   src:'espn',             // source des données : 'espn' (direct, sans relais) ou 'nhl' (relais local requis)
   bankroll:1000, minEdge:0.04, maxStake:0.02, kellyFrac:0.5, availw:0.70,
-  watch:true, pollMin:5, autoOdds:true,
+  watch:true, pollMin:5, autoOdds:true, oddsMode:'auto',   // cotes : 'auto' | 'jour' | 'manuel' (31/10/2026)
   coldK:15, gateLineups:true,
   regOff:0.30, regDef:0.40, preseason:false, strength:true,
   kSh:2000, kSv:3000,     // réussite d'équipe au tir / aux arrêts : tirs d'a priori (régression PDO)
@@ -575,8 +576,8 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-10-29';
-const BUILD_REV=2;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
+const BUILD='2026-10-31';
+const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
 const S = {
@@ -747,13 +748,13 @@ const oddsCost=()=>2*String(document.querySelector('#oddsRegion')?.value||'fr').
 // rafraîchissement automatique retenu par le budget ? (au chargement : la moitié ; après une composition : le tout)
 function credHeld(why,now=new Date()){ const B=credBudget(now); return !!B&&B.spent+oddsCost()>(why==='lineup'?B.allow:B.allow/2); }
 function credBudgetBanner(){
-  const B=credBudget(); if(!B||!Object.keys(S.odds).length||!credHeld('lineup')) return '';
+  const B=credBudget(); if(!B||oddsModeOf()!=='auto'||!Object.keys(S.odds).length||!credHeld('lineup')) return '';   // budget : celui de l'automatique
   const at=S.oddsAt?` Cotes affichées : relevé de ${new Date(S.oddsAt).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}.`:'';
   return `<div class="verdict v-chk cred-warn cred-budget" style="margin:0 0 12px"><div class="v-t">BUDGET DE CRÉDITS DU JOUR ATTEINT : ${B.spent} SUR ${B.allow}</div><div class="v-b">Plus de rafraîchissement automatique des cotes jusqu'à demain, pour tenir jusqu'au 1er du mois (${B.left} crédits restants pour ${B.daysLeft} jour${B.daysLeft>1?'s':''}). « Récupérer cotes » (onglet Value / cotes, ${oddsCost()} crédits) reste disponible.${at}</div></div>`;
 }
 function credLineHTML(){
   const B=credBudget(); if(!B) return '';
-  return `<p class="note cred-line" style="margin:0 0 8px">Crédits The Odds API : <b>${B.left}</b> restants · aujourd'hui <b>${B.spent}</b> utilisé${B.spent>1?'s':''} sur un budget de <b>${B.allow}</b> (${B.daysLeft} jour${B.daysLeft>1?'s':''} jusqu'au 1er du mois). Rafraîchissement automatique : au chargement de la page jusqu'à ${Math.floor(B.allow/2)}, après une composition confirmée jusqu'à ${B.allow} ; « Récupérer cotes » et les cotes buteur US comptent aussi.</p>`;
+  return `<p class="note cred-line" style="margin:0 0 8px">Crédits The Odds API : <b>${B.left}</b> restants · aujourd'hui <b>${B.spent}</b> utilisé${B.spent>1?'s':''} sur un budget de <b>${B.allow}</b> (${B.daysLeft} jour${B.daysLeft>1?'s':''} jusqu'au 1er du mois). ${({auto:`Rafraîchissement automatique : au chargement de la page jusqu'à ${Math.floor(B.allow/2)}, après un gardien confirmé jusqu'à ${B.allow}`,jour:'Rafraîchissement : une récupération automatique par jour (la première), puis « Récupérer cotes »',manuel:'Rafraîchissement manuel : seulement « Récupérer cotes »'})[oddsModeOf()]} ; « Récupérer cotes » et les cotes buteur US comptent aussi.</p>`;
 }
 function creditBanner(){
   const L=credLeft(); if(L==null) return ''; if(L>=CRED_LOW) return credBudgetBanner();
@@ -3425,6 +3426,8 @@ const cmNote=`<p class="note">Clique sur une ligne pour déplier sa carte compl�
 function bindViewBar(){
   $$('[data-view]').forEach(b=>{ if(b._vb) return; b._vb=1; b.addEventListener('click',()=>{ CFG[b.dataset.scope||'compact']=b.dataset.view==='c'; safeSet('nhlvb_cfg',JSON.stringify(CFG)); renderScore(); renderGames(); }); });
   $$('[data-csort]').forEach(b=>{ if(b._vb) return; b._vb=1; b.addEventListener('click',()=>{ CFG.cSort=b.dataset.csort; safeSet('nhlvb_cfg',JSON.stringify(CFG)); renderScore(); renderGames(); }); });
+  $$('[data-oddsmode]').forEach(s=>{ if(s._vb) return; s._vb=1; s.addEventListener('change',()=>{ oddsModeSet(s.value); }); });
+  $$('[data-oddsnow]').forEach(b=>{ if(b._vb) return; b._vb=1; b.addEventListener('click',()=>{ b.disabled=true; fetchOdds(); }); });
 }
 function compactHTML(ready,waiting,row){
   const all=cmSort([...ready.map(x=>({...x,conf:true})),...waiting.map(x=>({...x,conf:false}))]);
@@ -3832,7 +3835,7 @@ function renderScore(){
 
   let html='';
   html+=curErrBanner();
-  html+=formStatusHTML()+viewBarHTML('s');
+  html+=formStatusHTML()+oddsBarHTML()+viewBarHTML('s');
   const compact=CFG.compact!==false;
   if(compact) html+=compactHTML(ready,waiting,row);
   else{
@@ -4104,7 +4107,7 @@ function renderGames(){
       </div></div>`;
   };
   const compactG=CFG.compactG!==false;
-  el.innerHTML=curErrBanner()+formStatusHTML()+viewBarHTML('g')+banner+(compactG
+  el.innerHTML=curErrBanner()+formStatusHTML()+oddsBarHTML()+viewBarHTML('g')+banner+(compactG
     ? `<div class="cm">${cmHeadHTML()}${cmSort(S.games.map(g=>({g,R:S.proj.get(g.id)})).filter(x=>x.R)).map(({g,R})=>cmRowHTML(g,R,!!S.lineups[g.id],cardOf(g),'g')).join('')}</div>`
       + S.games.filter(g=>!S.proj.get(g.id)).map(cardOf).join('') + cmNote
     : S.games.map(cardOf).join(''));
@@ -4357,7 +4360,7 @@ async function checkLineup(g){
 async function refreshLineups(list,{quiet=false}={}){
   const games=list||S.games.filter(g=>['FUT','PRE'].includes(g.state||'FUT'));
   if(!games.length) return 0;
-  let changed=0;
+  let changed=0, conf=0;                              // conf : gardiens confirmés (les blessés de toute la ligue ne comptent pas)
   if(CFG.src==='espn'){
     // composition officielle des matchs qui commencent dans les 2 h
     const now=Date.now(), near=games.filter(g=>{ const t=Date.parse(g.start); return t-now<2*3600e3 && t-now>-15*60e3; });
@@ -4384,13 +4387,15 @@ async function refreshLineups(list,{quiet=false}={}){
     }
     savePicks();
     S.proj.set(g.id,projectGame(g));
-    changed++;
+    changed++; conf++;
   }
   if(changed){
-    // Les books bougent à l'annonce du gardien : sans cotes fraîches, pas de niveau 1.
-    try{ await autoOdds('lineup'); }catch(e){}
+    // Les books bougent à l'annonce du gardien : sans cotes fraîches, pas de niveau 1. Rafraîchies après un GARDIEN
+    // confirmé seulement (31/10/2026) : avant, aussi à chaque changement de la liste des blessés de toute la ligue (un
+    // joueur d'une équipe qui ne joue pas ce soir suffisait), jusqu'à un appel toutes les 10 minutes.
+    if(conf){ try{ await autoOdds('lineup'); }catch(e){} }
     render();
-    if(!quiet) toast(`${changed} composition(s) confirmée(s) — projections mises à jour`);
+    if(!quiet) toast(conf?`${conf} composition(s) confirmée(s) — projections mises à jour`:'Blessés ou feuille de match mis à jour — projections recalculées');
     setStatus(`${luWord(true)} : ${Object.keys(S.lineups).length}/${S.games.length}`);
   }else if(!quiet){
     toast('Aucune composition publiée pour l\'instant');
@@ -4634,15 +4639,61 @@ function applyOdds(data){
   }
   return kept;
 }
+// RAFRAÎCHISSEMENT DES COTES AU CHOIX (31/10/2026) — « il utilise beaucoup de crédits par jour pour les rafraîchissements :
+// est-il possible de le faire de manière manuelle à la place d'automatique ? » Trois modes, partagés par la synchro :
+//  · automatique : comme avant (au chargement de la page si les cotes ont plus de 15 min, après chaque gardien confirmé si
+//    elles ont plus de 10 min ; dans le budget du jour) ;
+//  · une fois par jour : la première récupération de la journée seulement, puis quand on clique ;
+//  · manuel : seulement quand on clique.
+// Dans tous les modes, les cotes déjà relevées dans la journée restent affichées après un rechargement, quel que soit leur
+// âge, et celles reçues de l'autre appareil aussi, même sans clé ici (avant : en « Non », un rechargement les perdait).
+const ODDS_MODES={auto:'automatique',jour:'une fois par jour',manuel:'manuel'};
+function oddsModeOf(c=CFG){ const m=c&&c.oddsMode; return m==='jour'||m==='manuel'?m:(c&&c.autoOdds===false?'manuel':'auto'); }
+function oddsFromCache(){
+  if(Object.keys(S.odds).length||!S.games.length) return false;
+  const c=oddsCacheFor($('#oddsRegion')?.value||'fr'); if(!c) return false;
+  S.oddsAt=c.at; S.oddsRaw=c.data; applyOdds(c.data); S.oddsCached=true; projectAll(); render(); return true;
+}
+// matchs pas encore commencés dont un gardien a été confirmé APRÈS les cotes affichées (le marché a pu bouger)
+function oddsStaleGames(){
+  if(!S.oddsAt||!Object.keys(S.odds).length) return [];
+  return S.games.filter(g=>{ const lu=S.lineups[g.id]; if(!lu||gameStarted(g)) return false;
+    const t=typeof lu.at==='number'?lu.at:Date.parse(lu.at); return isFinite(t)&&t>S.oddsAt; });
+}
+// ligne des cotes, en tête de Score prédit et de Matchs : heure du relevé, crédits du jour, matchs confirmés depuis,
+// mode de rafraîchissement, bouton de relevé
+function oddsBarHTML(){
+  if(!S.games.length) return '';
+  const mode=oddsModeOf(), key=!!String($('#oddsKey')?.value||'').trim(), n=Object.keys(S.odds).length, B=credBudget(), L=credLeft();
+  const st=oddsStaleGames().length;
+  const what=n?`<b>relevé de ${hhmm(S.oddsAt)}</b>`
+    : key?`<b class="warn">pas encore aujourd'hui</b> <span class="dimtxt">— pronostic et total sur le modèle seul</span>`
+    : `<b>aucune</b> <span class="dimtxt">— pas de clé The Odds API sur cet appareil (Value / cotes) ; avec la synchro, les cotes relevées sur l'autre appareil s'affichent ici</span>`;
+  const stale=st?` · <span class="warn" title="Les books bougent à l'annonce du gardien : des cotes relevées après l'annonce font un meilleur ancrage du pronostic (et le niveau 1 des paris simples l'exige).">gardien confirmé depuis sur ${st} match${st>1?'s':''}</span>`:'';
+  const cr=B?` · <span class="dimtxt">crédits : ${B.spent} aujourd'hui, ${B.left} restants</span>`:'';
+  const sel=`<label class="dimtxt odds-mode" title="Automatique : au chargement de la page et après chaque gardien confirmé (au plus toutes les 10 min), dans le budget du jour. Une fois par jour : la première récupération de la journée, puis quand tu cliques. Manuel : seulement quand tu cliques. Les cotes relevées restent affichées toute la journée ; celles de l'autre appareil arrivent par la synchro.">rafraîchissement <select data-oddsmode>${Object.entries(ODDS_MODES).map(([k,v])=>`<option value="${k}"${k===mode?' selected':''}>${v}</option>`).join('')}</select></label>`;
+  const btn=key&&!(L!=null&&L<=0)?`<button class="btn sm" data-oddsnow title="Un appel à The Odds API : ${oddsCost()} crédits">${n?'Rafraîchir':'Récupérer les cotes'} · ${oddsCost()} crédits</button>`:'';
+  return `<div class="odds-bar">Cotes : ${what}${stale}${cr} · ${sel} ${btn}</div>`;
+}
+function oddsModeSet(m){
+  if(!ODDS_MODES[m]) return false;
+  CFG.oddsMode=m; CFG.autoOdds=m==='auto';                  // autoOdds : lu par les versions d'avant le 31/10 (« une fois par jour » → aucun automatique)
+  safeSet('nhlvb_cfg',JSON.stringify(CFG)); cfgTouched(); fillCfg(); renderScore(); renderGames(); renderValue();
+  toast(m==='manuel'?`Cotes en manuel : relevées seulement quand tu cliques (${oddsCost()} crédits)`
+    :m==='jour'?'Cotes : une récupération automatique par jour, la première ; ensuite quand tu cliques'
+    :'Cotes : rafraîchissement automatique, dans le budget du jour',5000);
+  return true;
+}
 // Rafraîchissement AUTOMATIQUE (chargement de la page, compositions confirmées), économe en crédits (14/10/2026) :
 // cotes gardées du jour d'abord ; puis un appel seulement si elles manquent ou sont vieilles (15 min au chargement,
 // 10 min après une composition) — et jamais sous 40 crédits dès que la journée a ses cotes, ni à 0.
 async function autoOdds(why){
-  if(!CFG.autoOdds||!($('#oddsKey')?.value||'').trim()) return false;
-  if(!Object.keys(S.odds).length){ const c=oddsCacheFor($('#oddsRegion')?.value||'fr');
-    if(c){ S.oddsAt=c.at; S.oddsRaw=c.data; applyOdds(c.data); S.oddsCached=true; if(S.games.length) projectAll(); render(); } }
+  oddsFromCache();                                                 // cotes déjà relevées dans la journée, ou de l'autre appareil : toujours, sans crédit
+  const mode=oddsModeOf();
+  if(mode==='manuel'||!($('#oddsKey')?.value||'').trim()) return false;
   const have=Object.keys(S.odds).length>0, age=Date.now()-(S.oddsAt||0), L=credLeft();
   if(L!=null&&L<=0) return false;                                  // crédits épuisés : rien d'automatique
+  if(mode==='jour'){ if(have) return false; await fetchOdds({auto:true,why}); return true; }   // la première de la journée seulement
   if(have&&credLow()) return false;                                // économie : la journée a déjà ses cotes
   if(have&&age<(why==='lineup'?10*60e3:ODDS_TTL)) return false;     // encore fraîches
   if(have&&credHeld(why)) return false;                             // budget du jour (23/10/2026)
@@ -5827,7 +5878,7 @@ function fillCfg(){
   $('#c_t1e').value=CFG.t1Edge; $('#c_t1g').value=CFG.t1Gap; $('#c_t1o').value=`${CFG.t1OddsMin}-${CFG.t1OddsMax}`; $('#c_t2s').value=CFG.t2Stake; $('#c_drawhi').value=+(100*CFG.drawHi).toFixed(1); $('#c_scgap').value=CFG.scGap; $('#c_scmind').value=+(100*CFG.scMinD).toFixed(0); $('#c_scmaxp').value=+(100*CFG.scMaxP).toFixed(0); $('#c_betmode').value=CFG.betMode; $('#c_favedge').value=+(100*CFG.favEdge).toFixed(1); $('#c_gapconf').value=Math.round(100*CFG.maxGapConf); $('#c_combo').value=CFG.comboOnly?'1':'0'; $('#c_cbase').value=CFG.comboBase;
   $('#c_kel').value=CFG.kellyFrac; $('#c_avail').value=CFG.availw; $('#c_watch').value=CFG.watch?'1':'0';
   if($('#autoLU')) $('#autoLU').checked=!!CFG.watch;
-  $('#c_poll').value=CFG.pollMin; $('#c_auto').value=CFG.autoOdds?'1':'0';
+  $('#c_poll').value=CFG.pollMin; $('#c_auto').value=oddsModeOf();
   const c=cacheSize(); $('#cacheInfo').textContent=`Cache : ${c.n} réponses · ${c.kb} Ko`;
 }
 function saveCfg(){
@@ -5877,7 +5928,7 @@ function saveCfg(){
     availw:clamp(+$('#c_avail').value,0,1),
     watch:$('#c_watch').value==='1',
     pollMin:clamp(+$('#c_poll').value||DEF.pollMin,2,60),
-    autoOdds:$('#c_auto').value==='1'
+    autoOdds:$('#c_auto').value==='auto', oddsMode:$('#c_auto').value
   };
   safeSet('nhlvb_cfg',JSON.stringify(CFG)); cfgTouched();
   if(S.games.length){ projectAll(); render(); }
@@ -5891,7 +5942,7 @@ function exportJson(){
   const yc=CFG.src==='espn'?espnYear(S.season||'20262027'):null, ck=yc?ESPN_CHECK[yc]:null;
   const diag={version:BUILD,rev:BUILD_REV,cfgv:CFG.cfgv,newer:S.newerBuild||S.cfgNewer||null,at:new Date().toISOString(),src:CFG.src,date:S.date,games:S.games.length,proj:S.proj.size,
     saisonEnCours:{erreur:S.curErr||null,ignoree:ESPN_CHECK.curRejected||null,controles:ck?{lignes:ck.n,reussis:ck.ok,sur:ck.chk,gardiens:`${ck.gok}/${ck.gchk}`,echecs:ck.fails||null,moyenneEnRetard:ck.lagT??null}:null},
-    forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(), compos:{dernier:COMPO_LAST,enAttente:COMPO_WAIT.length},
+    forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(), compos:{dernier:COMPO_LAST,enAttente:COMPO_WAIT.length}, cotes:{mode:oddsModeOf(),releve:S.oddsAt?new Date(S.oddsAt).toISOString():null,matchs:Object.keys(S.odds).length},
     // pronostic retenu = modèle + marché (09/10/2026) : poids, matchs cotés, matchs ancrés, résimulations
     ancrage:(()=>{ const P=[...S.proj.values()], A=P.filter(R=>R.mkt); return {poids:[CFG.mktW??null,CFG.mktT??null], cotes:Object.keys(S.odds||{}).length, ancres:A.length,
       essais:A.map(R=>R.mkt.it), ecartMax:A.length?+Math.max(...A.map(R=>Math.abs(R.pH-R.mkt.tW))).toFixed(4):null}; })()};

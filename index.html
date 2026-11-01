@@ -471,7 +471,7 @@ tr.row-t1 td{background:rgba(73,209,127,.05)}
         <label class="f">Niveau 1 : cotes (min – max) <input id="c_t1o" placeholder="1.50-3.50"></label>
         <label class="f">Niveau 2 : facteur de mise <input type="number" id="c_t2s" min="0" max="1" step="0.05"></label>
         <label class="f">Nul 60 min mis en évidence dès (%) <input type="number" id="c_drawhi" min="15" max="35" step="0.5"></label>
-        <label class="f">Paris proposés <select id="c_betmode"><option value="winner">vainqueurs prévus (sens du pronostic)</option><option value="value">valeur pure (outsiders compris)</option></select></label>
+        <label class="f" title="Mesuré au 01/11/2026 sur le journal : paris de valeur contre le pronostic (outsiders) 4 gagnés sur 32 pour 11 attendus selon les cotes ; dans le sens du pronostic 14 sur 35 pour 16,3.">Paris proposés <select id="c_betmode"><option value="winner">vainqueurs prévus (sens du pronostic)</option><option value="value">valeur pure (outsiders compris)</option></select></label>
         <label class="f">Vainqueur prévu : valeur minimale (%) <input type="number" id="c_favedge" min="0" max="10" step="0.5"></label>
         <label class="f">Contre le marché, gardiens confirmés : écart max. (pts) <input type="number" id="c_gapconf" min="8" max="35" step="1"></label>
         <label class="f" title="Au-delà, la valeur d'un buteur est « écart suspect » : montrée, jamais proposée (le marché sait peut-être quelque chose : rôle, ligne, blessure).">Buteur : probabilité max. / celle de la cote (×) <input type="number" id="c_scgap" min="1.1" max="3" step="0.1"></label>
@@ -576,7 +576,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-10-31';
+const BUILD='2026-11-01';
 const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
@@ -3624,7 +3624,7 @@ function betsHTML(g,R,list){
     <div class="bet-l"><span class="bet-n">NIVEAU ${b.tier}</span> <b>${b.lbl}</b> <span class="dimtxt">· ${FAM_LBL[b.fam]||b.fam}</span></div>
     <div class="bet-r mono">${pct(b.p,1)} · cote ${fmt(b.o,2)}${b.book?` <span class="dimtxt">${b.book}</span>`:''} · <span class="${b.tier===1?'vgood':'vmid'}">+${(100*b.ev).toFixed(1)}%</span> · mise ${(CFG.bankroll*b.stake).toFixed(0)} u</div>
     ${b.tier===2?`<div class="bet-w">→ niveau 1 si : ${b.why.join(' · ')}</div>`:''}
-    ${b.gap!=null&&b.gap>CFG.maxGap&&b.pm!=null?`<div class="bet-w warn">contre le marché : modèle ${pct(b.p,1)}, bookmakers ${pct(b.pm,1)} (${(100*b.gap).toFixed(0)} pts d'écart, gardiens confirmés) — c'est le modèle qui tranche ; vérifie la composition avant de jouer</div>`:''}
+    ${b.gap!=null&&b.gap>CFG.maxGap&&b.pm!=null?`<div class="bet-w warn">contre le marché : modèle ${pct(b.p,1)}, bookmakers ${pct(b.pm,1)} (${(100*b.gap).toFixed(0)} pts d'écart, gardiens confirmés) — c'est le modèle qui tranche ; vérifie la composition avant de jouer</div>`:''}${!alignedBet(b,R)?`<div class="bet-w warn">contre le pronostic (mode « valeur pure ») : mesuré au 01/11/2026, ces paris ont été gagnés 4 fois sur 32, pour 11 selon les cotes — le bilan les compte à part</div>`:''}
   </div>`).join('');
 }
 
@@ -4563,6 +4563,16 @@ function modeBets(g,R,O){
     .sort((a,b)=>(a.tier-b.tier)||(b.ev-a.ev));
   return {main, sus, side:rankedBets(g,R,O).filter(b=>!alignedBet(b,R)), mode:'winner'};
 }
+// PARIS CONSEILLÉS DU JOURNAL (01/11/2026). Le journal garde les conseils du mode en service (bets, mode bm) et, à
+// part, la valeur contre le pronostic que ce mode ne propose pas (bx). Le bilan appelle « paris conseillés » ceux qui
+// vont dans le sens du pronostic — les seuls que le mode vainqueurs (défaut depuis le 04/10) ait jamais proposés — et
+// mesure à part la valeur contre le pronostic, proposée seulement en mode « valeur pure » (et partout avant le 04/10).
+// Export du 01/11 : contre le pronostic 4 gagnés sur 32 pour 11,0 selon les cotes (0,5 % de chances par le seul hasard,
+// loi exacte) ; dans le sens du pronostic 14 sur 35 pour 16,3. Avant, le journal gardait les paris du mode valeur quel
+// que soit le mode : le bilan comptait comme conseillés des paris qui n'avaient pas été proposés en mode vainqueurs.
+function alignedLog(b,e){ return alignedBet(b,{pH:e.pH,pA:e.pA??(1-e.pH),over:{[CFG.line]:e.pOver??0.5}}); }
+function advisedOf(e){ return (e.bets||[]).filter(b=>alignedLog(b,e)); }
+function againstOf(e){ const ids=new Set(); return [...(e.bets||[]).filter(b=>!alignedLog(b,e)),...(e.bx||[])].filter(b=>!ids.has(b.id)&&ids.add(b.id)); }
 // Le vainqueur prévu et ses deux prix (prolongation incluse, 60 min) : cote à partir de laquelle il
 // devient jouable en mode vainqueurs, face à la meilleure cote du moment.
 function favPricesHTML(g,R,O){
@@ -4879,11 +4889,13 @@ function gameStarted(g){ const t=Date.parse(g.start); return !['FUT','PRE'].incl
 function xsOf(p){ return p&&p.ls>0?{xs:+p.ls.toFixed(2),x0:+(p.ls0??p.ls).toFixed(2)}:{}; }
 function snapEntry(g,R){
   const O=S.odds[g.id]||{};
-  const bets=rankedBets(g,R,S.odds[g.id]||null).map(b=>({
+  // conseils du mode en service (01/11/2026 ; avant : ceux du mode valeur, quel que soit le mode) et, à part, la valeur
+  // contre le pronostic que ce mode ne propose pas (bx) : le bilan mesure ce qui a été conseillé, et le reste à part
+  const MBj=modeBets(g,R,S.odds[g.id]||null), jb=b=>({
     id:b.id, lbl:b.lbl, fam:b.fam, p:b.p, o:b.o, line:b.line,
     stake:+(b.stake*CFG.bankroll).toFixed(2), ev:b.ev, book:b.book||null, pm:b.pm??null, gap:b.gap??null,
     tier:b.tier
-  }));
+  }), bets=MBj.main.map(jb), bx=MBj.side.map(jb);
   return {
     date:S.date, gameId:g.id, away:g.away.abv, home:g.home.abv,
     pH:R.pH, pA:R.pA, eH:R.eH, eA:R.eA, eTot:R.eTot,
@@ -4906,7 +4918,7 @@ function snapEntry(g,R){
     ...(R.mkt?{pHm:R.mkt.m.pH, eTotM:R.mkt.m.eTot, pOverM:R.mkt.m.over?.[CFG.line]??null}:{}),
     ...(()=>{ const I=mktInputs(g); return I?{mk:{pH:I.pH!=null?+I.pH.toFixed(4):null, L:I.L, pO:I.pO!=null?+I.pO.toFixed(4):null, w:R.mkt?[R.mkt.wW,R.mkt.wT]:[0,0]}}:{}; })(),
     lineupOK:!!S.lineups[g.id], compo:S.pasted[g.id]?'collée':(ESPN_OFF[g.id]?.pub?'ESPN':null),
-    oddH:O.h?.o||null, oddA:O.a?.o||null, bets, snapAt:Date.now(),
+    oddH:O.h?.o||null, oddA:O.a?.o||null, bets, ...(bx.length?{bx}:{}), bm:MBj.mode, snapAt:Date.now(),
     res:null
   };
 }
@@ -4922,7 +4934,7 @@ function journalSnapshot(){
     n++;
   }
   // n'écrit que si une projection journalisée a changé
-  const sig=JSON.stringify(S.games.map(g=>{ const e=S.log.find(x=>x.gameId===g.id); return e?[e.gameId,+(e.pH||0).toFixed(3),+(e.eTot||0).toFixed(2),e.lineupOK,e.compo,(e.bets||[]).map(b=>b.id+'@'+b.o).join(','),(e.scv||[]).map(s=>s.id+'@'+s.o).join(',')]:0; }));
+  const sig=JSON.stringify(S.games.map(g=>{ const e=S.log.find(x=>x.gameId===g.id); return e?[e.gameId,+(e.pH||0).toFixed(3),+(e.eTot||0).toFixed(2),e.lineupOK,e.compo,(e.bets||[]).map(b=>b.id+'@'+b.o).join(','),(e.bx||[]).map(b=>b.id+'@'+b.o).join(','),e.bm||'',(e.scv||[]).map(s=>s.id+'@'+s.o).join(',')]:0; }));
   if(sig!==LOG_SIG||nfz){ LOG_SIG=sig; saveLog(); }
   return {n,frozen,pre};
 }
@@ -5380,7 +5392,7 @@ function roiStreams(){
     for(const s of e.scv||[]){ if(!(s.sv>=2)||!(s.o>1)) continue; const r=scorerScored(e,s); if(r==null) continue;
       pv.push({d:e.date,k:`${e.gameId}_${s.id}`,s:1,o:s.o,net:r?s.o-1:-1}); }
     if(e.combo&&e.combo.p>0){ const o=(1+e0)/e.combo.p; pc.push({d:e.date,k:String(e.gameId),s:1,o,net:comboWon(e)?o-1:-1}); }
-    for(const bet of e.bets||[]){ if(bet.fam==='combiné') continue; const r=betResult(bet,e.res); if(r!=='W'&&r!=='L') continue;
+    for(const bet of advisedOf(e)){ if(bet.fam==='combiné') continue; const r=betResult(bet,e.res); if(r!=='W'&&r!=='L') continue;
       pa.push({d:e.date,k:`${e.gameId}_${bet.id}`,s:bet.stake,o:bet.o,net:betPnl(bet,e.res)}); }
   }
   return [
@@ -5390,7 +5402,7 @@ function roiStreams(){
     {key:'oth',grp:'mine',unit:'€',lbl:'autres (nul + buts, simples)',sub:true,items:B.filter(b=>!b.sc&&!isWC(b)).map(it)},
     {key:'pv',grp:'tool',unit:'u',lbl:'Buteurs à valeur proposés',items:pv},
     {key:'pc',grp:'tool',unit:'u',lbl:'Combinés proposés (cote « dès »)',items:pc},
-    {key:'pa',grp:'tool',unit:'u',lbl:'Paris conseillés (vainqueur, total)',items:pa}
+    {key:'pa',grp:'tool',unit:'u',lbl:'Paris conseillés (sens du pronostic)',items:pa}
   ].filter(x=>x.items.length);
 }
 // un flux → bilan, fenêtre de tendance (W → Ls, dernier jour réglé), rythme, courbe du cumul jour par jour
@@ -5611,7 +5623,7 @@ function renderBt(){
   /* ---------- 2. précision du modèle ---------- */
   let brier=0,hit=0,mae=0,maeMkt=0,maeMktN=0,biais=0,ovHit=0,ovN=0,otN=0,otObs=0,otPred=0,nOver=0;
   const buckets=Array.from({length:10},(_,i)=>({lo:i/10,hi:(i+1)/10,n:0,w:0,psum:0}));
-  const months=new Map(), byFam=new Map(), byOdd=new Map(), byGap=new Map(), byTier=new Map();
+  const months=new Map(), byFam=new Map(), byOdd=new Map(), byGap=new Map(), byTier=new Map(), xA={n:0,w:0,eo:0,stake:0,pnl:0};
   const touch=(m,k)=>{ if(!m.has(k)) m.set(k,{n:0,stake:0,pnl:0,w:0,l:0,p:0}); return m.get(k); };
   const oddBand=o=>o<1.8?'≤ 1,80':(o<2.5?'1,80–2,50':(o<4?'2,50–4,00':'≥ 4,00'));
   const gapBand=d=>d<0.3?'< 0,3 but':(d<0.6?'0,3–0,6':(d<1?'0,6–1,0':'≥ 1,0 but'));
@@ -5628,7 +5640,9 @@ function renderBt(){
     if(e.reg?.D!=null){ otN++; otPred+=e.reg.D; if(e.res.ot) otObs++; }
     const b=buckets[Math.min(9,Math.floor(e.pH*10))]; b.n++; b.w+=y; b.psum+=e.pH;
     const gap=e.mktLine!=null?Math.abs(e.eTot-e.mktLine):null;
-    for(const bet of (e.bets||[])){
+    for(const bet of againstOf(e)){ if(bet.fam==='combiné') continue; const r=betResult(bet,e.res); if(r!=='W'&&r!=='L') continue;   // valeur contre le pronostic : à part (01/11/2026)
+      xA.n++; if(r==='W') xA.w++; xA.eo+=1/bet.o; xA.stake+=bet.stake; xA.pnl+=betPnl(bet,e.res); }
+    for(const bet of advisedOf(e)){
       const r=betResult(bet,e.res); if(r==null) continue;
       const pnl=betPnl(bet,e.res);
       // Combiné du même match : prix théorique (produit des cotes simples), presque jamais
@@ -5683,7 +5697,7 @@ function renderBt(){
     if((e.pH>=0.5)===e.res.winH) gHit++;
     gMae+=Math.abs(e.eTot-e.res.tot);
     if(e.mktLine!=null){ gMkt+=Math.abs(e.mktLine-e.res.tot); gMktN++; }
-    for(const bet of (e.bets||[])){ const r=betResult(bet,e.res); if(r==null||bet.fam==='combiné') continue;
+    for(const bet of advisedOf(e)){ const r=betResult(bet,e.res); if(r==null||bet.fam==='combiné') continue;
       gTheoSt+=bet.stake; gTheo+=betPnl(bet,e.res); }
   }
   const dts=allDone.map(e=>e.date).sort();
@@ -5703,7 +5717,7 @@ function renderBt(){
       <div><div class="sec">ROI réel</div><div class="big ${gNet>0?'up':(gNet<0?'dn':'')}">${gStake?(100*gNet/gStake).toFixed(1)+'%':'—'}</div>
         <div class="note">ce que ton compte a fait</div></div>
       <div><div class="sec">ROI théorique</div><div class="big ${gTheo>0?'up':(gTheo<0?'dn':'')}">${gTheoSt?(100*gTheo/gTheoSt).toFixed(1)+'%':'—'}</div>
-        <div class="note">paris conseillés, en unités</div></div>
+        <div class="note">paris conseillés (sens du pronostic), en unités</div></div>
     </div>
     <p class="note" style="margin-top:8px">L'écart entre ROI réel et ROI théorique est le plus instructif : le second juge le modèle, le premier juge la façon dont tu l'exploites. En dessous de 100 paris, aucun des deux ne prouve quoi que ce soit.</p>
   </div></div>`;
@@ -5740,7 +5754,7 @@ function renderBt(){
       <div class="note">${slope==null?`il faut 40 matchs répartis sur 3 tranches (${done.length} pour l'instant)`
         :`pente de calibration : 1,00 = parfait, &lt; 1 = trop confiant${shrinkSugg?` · rétrécissement suggéré ${pct(shrinkSugg,0)}`:''}`}</div></div>
     <div><div class="sec">ROI théorique total</div><div class="big ${tot.pnl>0?'up':(tot.pnl<0?'dn':'')}">${roi(tot)==null?'—':(100*roi(tot)).toFixed(1)+'%'}</div>
-      <div class="note">${tot.n} paris conseillés · ${fmt(tot.stake,0)} u</div></div>
+      <div class="note">${tot.n} paris conseillés (sens du pronostic) · ${fmt(tot.stake,0)} u</div></div>
   </div>
 
   <div class="sec">ROI par mois</div>
@@ -5757,6 +5771,7 @@ function renderBt(){
     <td class="mono ${tot.pnl>0?'up':'dn'}"><b>${tot.pnl>=0?'+':''}${fmt(tot.pnl,1)}</b></td>
     <td class="mono ${roi(tot)>0?'up':'dn'}"><b>${(100*roi(tot)).toFixed(1)}%</b></td><td></td></tr>`:''}</tbody></table>
 
+  ${xA.n?`<p class="note" style="margin-top:6px" data-contre><b>À part, la valeur contre le pronostic</b> (outsider du modèle, nul 60 min, côté le moins probable du total) : jamais proposée en mode vainqueurs, seulement en mode « valeur pure » (et partout avant le 04/10) — ${xA.n} pari${xA.n>1?'s':''}, ${xA.w} gagné${xA.w>1?'s':''} pour ${fmt(xA.eo,1)} selon les cotes, ${xA.pnl>=0?'+':''}${fmt(xA.pnl,1)} u à la mise de l'outil.</p>`:''}
   ${byTier.size?`<div class="sec" style="margin-top:18px">ROI par niveau de recommandation</div>${tbl(byTier,'Niveau')}
     <p class="note">Le niveau 1 doit faire mieux que le niveau 2 sur la durée. Si ce n'est pas le cas après une centaine de paris, les critères du niveau 1 ne trient rien et doivent être revus.</p>`:''}
   <div class="grid g2" style="margin-top:18px">
@@ -5814,10 +5829,10 @@ function renderBt(){
   <tbody>${[...S.log].filter(e=>inPeriod(e.date)).sort((a,b)=>a.date<b.date?1:-1).slice(0,200).map(e=>{
     const ok=e.res?((e.pH>=0.5)===e.res.winH):null;
     const tOK=e.res&&e.pOver!=null?((e.pOver>=0.5)===(e.res.tot>e.line)):null;
-    const bl=(e.bets||[]).map(b=>{
-      const r=e.res?betResult(b,e.res):null;
+    const bl=[...advisedOf(e),...againstOf(e)].map(b=>{
+      const r=e.res?betResult(b,e.res):null, x=!alignedLog(b,e);
       const c=r==='W'?'up':(r==='L'?'dn':'dimtxt');
-      return `<span class="${c}">${b.lbl} @${fmt(b.o,2)}${r?' '+(r==='W'?'✓':(r==='L'?'✗':'≡')):''}</span>`;
+      return `<span class="${c}"${x?' style="opacity:.6" title="Valeur contre le pronostic : hors des paris conseillés du bilan"':''}>${b.lbl} @${fmt(b.o,2)}${r?' '+(r==='W'?'✓':(r==='L'?'✗':'≡')):''}${x?' <span class="dimtxt">· contre le pronostic</span>':''}</span>`;
     }).join('<br>')||'<span class="dimtxt">—</span>';
     return `<tr><td class="l dimtxt mono">${e.date}</td><td class="l">${e.away} @ ${e.home}${e.lineupOK?' <span class="pill up" style="font-size:9px">compo</span>':''}</td>
       <td class="l dimtxt" style="font-size:11.5px">${e.gkA||'—'} / ${e.gkH||'—'}</td>

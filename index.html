@@ -576,7 +576,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-11-01';
+const BUILD='2026-11-06';
 const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
@@ -2563,6 +2563,31 @@ function recognizeLineup(text,skaters,everyone=skaters,fuzzy=false){
   return {dressed,absent,fuzzyHits,cut,stop,first,last,lines};
 }
 const PASTE_MIN=12;                                 // patineurs reconnus pour valoir composition complète
+// COMPTE D'ALIGNÉS (06/11/2026). Une équipe aligne 18 patineurs. Les deux dernières captures reçues (exports du 01/11 et
+// du 06/11) en ont donné 19 (COL, 31/10) et 17 (PIT, 05/11), appliqués sans un mot : un absent ou un autre joueur pris
+// pour un aligné (nom mal lu), ou un aligné pas lu (nom illisible, joueur rappelé que l'effectif ne connaît pas
+// encore) — c'est un joueur de trop ou de moins dans la projection et dans les listes de buteurs. Le compte est
+// désormais signalé dès qu'il s'écarte de 18 (compte rendu du match, ligne du match, messages du collage), avec les
+// joueurs à vérifier ; rien n'est corrigé d'office : un rappelé inconnu de l'outil ferait retirer le mauvais joueur.
+const LU_SK=18;
+function luGap(n){ return n>=PASTE_MIN&&n!==LU_SK?n-LU_SK:0; }
+function luGapWord(d){ return d<0?`il en manque ${-d}`:`${d} de trop`; }
+function luGapOf(z,PZ){ return z&&z.applied&&pzMode(z,PZ)!=='out'?luGap((z.dressed||[]).length):0; }
+function luGapHTML(g,sd,z,PZ,T,out){
+  const d=luGapOf(z,PZ); if(!d) return '';
+  const D=new Set(z.dressed||[]), A=new Set(z.absent||[]), sk=T?.skaters||[];
+  let why;
+  if(d<0){
+    const miss=out.filter(p=>!A.has(p.id)&&!ESPN_OUT.has(p.id)).slice(0,Math.min(3,1-d)).map(p=>escHtml(lastOf(p.name)));
+    why=`un nom illisible, ou un joueur rappelé que l'outil ne connaît pas encore${miss.length?` ; les plus utilisés des retirés : ${miss.join(', ')} — s'il joue, recolle la compo (le texte si possible)`:''}`;
+  } else {
+    const byName=new Map(sk.map(p=>[p.name,p]));
+    const sus=[...new Set([...(z.fz||[]).filter(([n])=>D.has(byName.get(n)?.id)).map(([n,w])=>`${escHtml(lastOf(n))} (lu « ${escHtml(w)} »)`),
+      ...sk.filter(p=>D.has(p.id)&&ESPN_OUT.has(p.id)).map(p=>`${escHtml(lastOf(p.name))} (liste des blessés)`)])].slice(0,4);
+    why=`un absent ou un autre joueur pris pour un aligné${sus.length?` ; à vérifier : ${sus.join(', ')}`:''} — coche-le dans les absents du soir, ou recolle la compo`;
+  }
+  return ` · <span class="warn" data-lugap="${g[sd].abv}">⚠ ${luGapWord(d)} : une équipe aligne ${LU_SK} patineurs — ${why}</span>`;
+}
 const escHtml=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // LECTURE D'IMAGES (OCR) — Tesseract.js 5.1.1, exécuté DANS le navigateur : la capture ne quitte
@@ -2674,7 +2699,8 @@ function pasteToast(g,r,mode,pre=''){
   const kept=r.kept||[], got=r.got||{};
   if(mode==='out') return `${pre}${(got.away||0)+(got.home||0)} absent(s) reconnu(s) — ${g.away.abv} @ ${g.home.abv} recalculé`;
   const part=sd=>kept.includes(sd)?`${g[sd].abv} : compo d'avant gardée`:`${g[sd].abv} ${got[sd]||0}`, fresh=['away','home'].filter(sd=>!kept.includes(sd));
-  return `${pre}${part('away')} · ${part('home')} joueurs reconnus — ${fresh.length&&fresh.every(sd=>r[sd]?.applied)?'composition appliquée':'vérifie le compte rendu'}`;
+  const gp=fresh.filter(sd=>luGapOf(r[sd],r)).map(sd=>`${g[sd].abv} ${luGapWord(luGapOf(r[sd],r))}`);   // compte douteux (06/11/2026)
+  return `${pre}${part('away')} · ${part('home')} joueurs reconnus — ${fresh.length&&fresh.every(sd=>r[sd]?.applied)?'composition appliquée':'vérifie le compte rendu'}${gp.length?` — ⚠ ${gp.join(', ')} (une équipe aligne ${LU_SK} patineurs) : vérifie le compte rendu`:''}`;
 }
 // compos de plus de PASTE_KEEP_D jours : retirées (le relevé du journal garde ce qui a compté) — sans quoi le stockage
 // du navigateur se remplit au fil de la saison ; pas de suppression à propager (elles ont quitté la synchro depuis longtemps)
@@ -2731,7 +2757,7 @@ function compoReceive(text,via='collage',{quiet=false,fromWait=false,fuzzy=false
     try{ const R=projectGame(d.g); if(R) S.proj.set(d.g.id,R); }catch(e){ console.warn('compo : recalcul',e); }
     done.push(d);
   }
-  const one=(d,sd)=>{ const r=d.per[sd], a=r.absent.size; return `${d.g[sd].abv} ${r.dressed.size} alignés${a?` · ${a} absent${a>1?'s':''}`:''}`; };
+  const one=(d,sd)=>{ const r=d.per[sd], a=r.absent.size, k=luGap(r.dressed.size); return `${d.g[sd].abv} ${r.dressed.size} alignés${k?` (⚠ ${luGapWord(k)})`:''}${a?` · ${a} absent${a>1?'s':''}`:''}`; };
   const nDone=done.reduce((a,d)=>a+d.sides.length,0);
   let msg;
   if(done.length) msg=`Compo${nDone>1?'s':''} rangée${nDone>1?'s':''} : `+done.map(d=>`${d.sides.map(sd=>one(d,sd)).join(' + ')} (${lbl(d.g)})`).join(' · ')
@@ -2739,6 +2765,7 @@ function compoReceive(text,via='collage',{quiet=false,fromWait=false,fuzzy=false
   else if(late.length) msg=`${late.map(d=>`${d.sides.map(sd=>d.g[sd].abv).join(' + ')} (${lbl(d.g)})`).join(' · ')} : match déjà commencé — la compo attend la journée suivante (▶)`;
   else if(best) msg=`Pas de compo complète reconnue : au mieux ${best.n} joueur${best.n>1?'s':''} de ${best.g[best.sd].abv} (il en faut ${PASTE_MIN}) — ${fuzzy?'capture trop petite ou peu lisible : prends tout le bloc, bien net':'copie tout le bloc de l\'équipe, ou toute la page'}`;
   else msg=`Aucun joueur des matchs du ${dLbl(S.date)} dans ${fuzzy?'cette capture':'ce texte'} — est-ce la bonne journée ?`;
+  if(done.some(d=>d.sides.some(sd=>luGap(d.per[sd].dressed.size)))) msg+=` — une équipe aligne ${LU_SK} patineurs : vérifie le compte rendu du match`;   // 06/11/2026
   msg=pre+cap+msg;
   if(late.length&&!done.length&&!fromWait) compoWait(text,via,fuzzy,conf);
   COMPO_LAST={at:Date.now(),via,date:S.date,len:text.length,image:fuzzy||undefined,conf:fuzzy?Math.round(conf||0):undefined,
@@ -3403,7 +3430,8 @@ function cmMineHTML(g,R){
     if(out.length){ const T=S.teams.get(g[sd].abv), nm=out.map(id=>T?.skaters.find(p=>p.id===id)?.name).filter(Boolean).map(lastOf);
       C.push(`${g[sd].abv} absents : ${nm.length?nm.slice(0,3).map(escHtml).join(', ')+(nm.length>3?` +${nm.length-3}`:''):out.length}`); }
   }
-  const PZ=S.pasted[g.id]; if(PZ) C.push(`compo collée ${hhmm(PZ.at)}${PZ.mode==='out'?' (absents)':''}`);
+  const PZ=S.pasted[g.id]; if(PZ){ const gp=['away','home'].filter(sd=>luGapOf(PZ[sd],PZ)).map(sd=>`${g[sd].abv} ${(PZ[sd].dressed||[]).length} alignés au lieu de ${LU_SK}`);   // compte douteux (06/11/2026)
+    C.push(`compo collée ${hhmm(PZ.at)}${PZ.mode==='out'?' (absents)':''}${gp.length?` · <b class="warn" data-lugap-row>⚠ ${gp.join(', ')}</b>`:''}`); }
   if(!B.length&&!C.length) return '';
   return `<span class="cm-mine">${B.length?`<span class="mn-l">tes paris</span> ${B.map(betShortHTML).join(' ')}`:''}${B.length&&C.length?' ':''}${C.length?`<span class="mn-l">ta compo</span> ${C.map(c=>`<span class="mn mn-c">✎ ${c}</span>`).join(' ')}`:''}</span>`;
 }
@@ -3510,7 +3538,7 @@ function pasteReport(g){
       : `seulement ${z.n} joueur(s) reconnus — trop peu pour une composition complète (au moins ${PASTE_MIN}) : colle le bloc entier`;
     const when=times.size>1?` <span class="dimtxt">(${hhmm(pzAt(z,PZ))})</span>`:'';
     const fz=(z.fz||[]).length?` · <span class="dimtxt">lus avec une faute : ${z.fz.map(([n,w])=>`${lastOf(n)} ← « ${escHtml(w)} »`).join(', ')}</span>`:'';
-    return `<div><b>${g[sd].abv}</b>${when} : ${head}${out.length?` · retirés : ${out.slice(0,8).map(p=>lastOf(p.name)).join(', ')}${out.length>8?'…':''}`:''}${fz}</div>`; }).join('')
+    return `<div><b>${g[sd].abv}</b>${when} : ${head}${luGapHTML(g,sd,z,PZ,T,out)}${out.length?` · retirés : ${out.slice(0,8).map(p=>lastOf(p.name)).join(', ')}${out.length>8?'…':''}`:''}${fz}</div>`; }).join('')
     + (PZ.src==='image'?`<div class="dimtxt">Image lue — confiance ${Math.round(PZ.conf||0)} %${(PZ.conf||0)<70?' : <span class="warn">lecture difficile, vérifie le texte ci-dessus ou importe une capture plus nette</span>':''}</div>`:'');
 }
 function pasteBox(g){

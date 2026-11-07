@@ -576,7 +576,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-11-06';
+const BUILD='2026-11-07';
 const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
@@ -2101,6 +2101,41 @@ function marketAnchor(g,R0,ph,pa,run){
   return R;
 }
 
+// NIVEAU DU MODÈLE SEUL (07/11/2026). Export du 06/11 : sur les 253 matchs réglés du 01/10 au 05/11, le modèle seul
+// annonçait 5,97 buts par match pour 6,40 réels — écart +0,43 ± 0,14 (z 3,1), le même du 01 au 08/10 (+0,42 sur
+// 57 matchs, presque tout sur l'a priori de l'an passé) et depuis (+0,43 sur 196) ; domicile et extérieur pareils.
+// Le moteur, lui, rend le niveau qu'on lui donne (deux équipes moyennes : 6,40 simulés pour 2 × 3,20) : le manque
+// vient des entrées. Pistes, aucune mesurable à part avec le journal : a priori de l'an passé en buts absolus alors
+// que la ligue marque plus (3,16 buts par équipe et par match contre 3,08 en 2025-26), absences comptées deux fois
+// (dans les buts réels de l'équipe et dans la disponibilité du soir)… L'écart ne faiblissant pas quand la saison en
+// cours prend du poids, l'a priori n'en est pas la cause principale.
+// CORRECTION MESURÉE : buts réels / buts du modèle seul AVANT correction, sur les LEVEL.N derniers matchs réglés des
+// soirées précédentes (stable dans la soirée), ramenée vers 1 avec LEVEL.K0 matchs d'a priori (écart type a priori
+// ≈ 5 % : 2,2 buts d'écart type par match pour 6 buts, (0,37 / 0,05)² ≈ 50), bornée ; sous LEVEL.nMin matchs, aucune.
+// Elle multiplie les buts attendus des DEUX équipes après le rétrécissement vers la ligue : le partage des buts ne
+// bouge pas. Le journal garde le facteur appliqué (lvK) : la mesure porte toujours sur le modèle avant correction,
+// jamais sur elle-même.
+const LEVEL={N:300, K0:50, nMin:20, lo:0.92, hi:1.10};
+let LEVEL_C=null;
+function levelK(){
+  const log=S.log||[]; let c=0, t=0;
+  for(const e of log) if(e&&e.res){ c++; t+=(e.eTotM??e.eTot??0)/(e.lvK||1)+(e.res.tot||0); }
+  const key=`${S.date}|${log.length}|${c}|${t.toFixed(3)}`;
+  if(LEVEL_C&&LEVEL_C.log===log&&LEVEL_C.key===key) return LEVEL_C.v;
+  const L=log.filter(e=>e&&e.res&&e.res.tot!=null&&e.date<S.date&&(e.eTotM??e.eTot)>0)
+    .sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0).slice(-LEVEL.N);
+  const n=L.length; let v={k:1,n,real:null,raw:null};
+  if(n>=LEVEL.nMin){
+    const real=L.reduce((a,e)=>a+e.res.tot,0)/n, raw=L.reduce((a,e)=>a+(e.eTotM??e.eTot)/(e.lvK||1),0)/n;
+    v={k:clamp(1+(real-raw)/(raw*(1+LEVEL.K0/n)),LEVEL.lo,LEVEL.hi),n,real,raw};
+  }
+  LEVEL_C={log,key,v}; return v;
+}
+function levelNoteHTML(){
+  const v=levelK();
+  if(v.n<LEVEL.nMin) return `<br><b>Niveau du modèle seul</b> (07/11/2026) : pas encore corrigé — ${v.n} match${v.n>1?'s':''} réglé${v.n>1?'s':''} des soirées précédentes, correction dès ${LEVEL.nMin}.`;
+  return `<br><b>Niveau du modèle seul</b> (07/11/2026) : buts attendus <span class="lv-k">×${fmt(v.k,3)}</span> — sur les ${v.n} derniers matchs réglés des soirées précédentes, ${fmt(v.real,2)} buts réels par match contre ${fmt(v.raw,2)} pour le modèle seul avant correction ; écart ramené vers 1 (${LEVEL.K0} matchs d'a priori), recalculé chaque jour.`;
+}
 function projectGame(g){
   const H=S.teams.get(g.home.abv), A=S.teams.get(g.away.abv);
   if(!H||!A) return null;
@@ -2139,6 +2174,9 @@ function projectGame(g){
     const k=(1-CFG.shrink)+CFG.shrink*(lgTot/tot);
     ph.lam*=k; pa.lam*=k;
   }
+  // niveau du modèle seul (07/11/2026) : correction mesurée sur le journal (levelK), la même pour les deux équipes
+  const LV=levelK();
+  if(LV.k!==1){ ph.lam*=LV.k; pa.lam*=LV.k; }
   const pconv=(l,s)=>clamp(l/Math.max(s,1),0.040,0.170);
   // SIMULATION en fonction des buts attendus (09/10/2026) : appelée une fois (modèle seul), puis une ou deux
   // fois si le pronostic est ancré sur le marché — toujours le même tirage à graine.
@@ -2247,6 +2285,7 @@ function projectGame(g){
   let R=run(ph,pa);
   if(!NOFORM){ const RA=marketAnchor(g,R,ph,pa,run); if(RA) R=RA; }   // pronostic retenu = modèle + marché
   R.players=playerProps(R);
+  R.lv=LV;                                            // facteur de niveau appliqué (journal, pronostic, export)
   return R;
 }
 
@@ -2349,9 +2388,11 @@ function ifPlayed(R,side,p){
   const ps=posKey(p.pos), sc=ps==='D'?LEAGUE.teamToiMin*2/5/(tot.D||1):LEAGUE.teamToiMin*3/5/(tot.F||1);
   const min=scMinutes(p), sh=scorerSh(p,min), fS=p.formS||1;
   const w=(p.s60>0&&sh!=null)?p.s60*sh*min*sc/60*fS:(p.g60||0)*min*sc/60;
-  const lg=(T.gPl??T.lam)*w/sumW;
+  const TGp=T.gPl??T.lam, lgR=TGp*w/sumW;
+  // même rétrécissement que les alignés (v3, 07/11/2026) : sa part ramenée vers la moyenne du poste, normalisée comme l'alignement
+  const z=(1-SHARE.a)+SHARE.a*P.reduce((a,x)=>a+shareM(x.p),0), lg=TGp*((1-SHARE.a)*w/sumW+SHARE.a*shareM(p))/z;
   const sumX=P.reduce((a,x)=>a+x.xr,0), xr=p.s60>0?p.s60*min*sc/60*fS:0, xs=sumX>0?T.sog*xr/sumX:null;   // tirs « s'il joue » (14/10/2026)
-  return {pGoal:1-Math.exp(-lg),lg,sh,min,xs,ctx:(sh>0&&xs>0)?lg/(xs*sh):null};
+  return {pGoal:1-Math.exp(-lg),lg,pRaw:1-Math.exp(-lgR),lgR,shk:lgR>0?lg/lgR:1,sh,min,xs,ctx:(sh>0&&xs>0)?lgR/(xs*sh):null};
 }
 // Joueur choisi pour un pari buteur : aligné (probabilité du modèle) ou hors alignement (« s'il joue »)
 function scorerPick(gid,pid){
@@ -2359,7 +2400,7 @@ function scorerPick(gid,pid){
   const pl=R.players.find(x=>x.id===pid); if(pl) return pl;
   for(const side of ['home','away']){ const T=S.teams.get(g[side].abv), sk=T?.skaters.find(x=>x.id===pid); if(!sk) continue;
     const ip=ifPlayed(R,side,sk); if(!ip) return null;
-    return {...sk,side,team:g[side].abv,g:sk.goals,pGoal:ip.pGoal,lg:ip.lg,shReg:ip.sh,scMin:ip.min,hors:true}; }
+    return {...sk,side,team:g[side].abv,g:sk.goals,pGoal:ip.pGoal,lg:ip.lg,pRaw:ip.pRaw,shk:ip.shk,shReg:ip.sh,scMin:ip.min,hors:true}; }
   return null;
 }
 function scorerOptions(g,R){
@@ -2368,6 +2409,32 @@ function scorerOptions(g,R){
   return L.map(p=>`<option value="${p.id}">${escHtml(p.name)} (${p.team}) — ${pct(p.pGoal,0)}${p.noHist?' · sans hist. NHL':''}</option>`).join('')
     +(others.length?`<optgroup label="Hors alignement prévu (probabilité « s'il joue »)">${others.map(({p,team})=>`<option value="${p.id}">${escHtml(p.name)} (${team})${p.noHist?' · sans hist. NHL':''}${CFG.src==='espn'&&ESPN_OUT.has(p.id)?' · blessé':''}</option>`).join('')}</optgroup>`:'');
 }
+// RÉPARTITION DES BUTS v3 (07/11/2026). Export du 06/11 : 1 158 joueurs-matchs suivis (3 plus probables, à valeur,
+// écartés ; matchs sans prolongation depuis le 08/10), jugés SACHANT les buts réels de leur équipe — P(il marque) =
+// 1 − (1 − sa part)^buts, ce qui sépare la répartition du niveau. Les plus probables : 156 buts pour 177,5 attendus
+// (1,6 % par le seul hasard) ; parts de 10 à 15 % : 102 pour 120,2 ; attaquants à 3-6 % : 32 pour 23,7. La part des
+// meilleurs est trop forte, celle de la profondeur trop faible. Ajusté par vraisemblance : part × (1 − α) + α × part
+// moyenne du poste (attaquant 6,8 %, défenseur 3,0 % : 12 × 6,8 + 6 × 3,0 ≈ 100 %), α = 0,28 — rapport de
+// vraisemblance 5,4 (p ≈ 0,02) ; validation croisée (200 partages des soirées) : α médian 0,29 [0,10 ; 0,46], gain
+// hors échantillon dans 72 à 80 % des partages. Après : plus probables 156 pour 157,6, attaquants 221 pour 220,9 ;
+// à valeur inchangés (67 pour 67,1). Défenseurs toujours au-dessus du réel (22 pour 29,7) : rien de démontré (p ≈ 0,08).
+// Les parts sont renormalisées sur l'alignement : le total de l'équipe ne change pas (ni pronostics, ni combinés).
+const SHARE={a:0.28, F:0.068, D:0.030};
+function shareM(p){ return posKey(p?.pos)==='D'?SHARE.D:SHARE.F; }
+function shareShrink(lg,ps){
+  const tot=lg.reduce((a,b)=>a+b,0); if(!(tot>0)||!(SHARE.a>0)) return lg.slice();
+  const s=lg.map((l,i)=>(1-SHARE.a)*l/tot+SHARE.a*shareM(ps[i])), z=s.reduce((a,b)=>a+b,0);
+  return s.map(v=>tot*v/z);
+}
+// GARDE-FOUS JUGÉS SUR LA PROBABILITÉ D'AVANT LE RÉTRÉCISSEMENT (07/11/2026) : écart au marché, défenseur sous 10 %,
+// annoncé 30 % et plus écartent exactement les mêmes joueurs qu'avant — leurs seuils ont été posés et mesurés sur
+// cette échelle. Jugé sur la nouvelle probabilité, l'écart au marché aurait écarté 89 buteurs à valeur journalisés de
+// plus (la profondeur monte), dont 56 au rapport 1,5 à 1,75 : 12 buts pour 5,0 selon les cotes, +73 u.
+// La probabilité d'avant se déduit de la probabilité affichée et du facteur de part (pRaw = 1 − (1 − p)^(1/shk)) :
+// jamais périmée, même pour un joueur recopié avec une autre probabilité.
+const pgG=p=>p&&p.shk>0&&p.shk!==1&&p.pGoal<1?1-Math.pow(1-p.pGoal,1/p.shk):(p?.pRaw??p?.pGoal);
+const shkOn=x=>!!x&&x.shk!=null&&Math.abs(x.shk-1)>=0.005;                       // facteur de part à montrer
+const prOf=p=>p&&p.pRaw!=null&&Math.abs(p.pRaw-p.pGoal)>=5e-5?{pr:+p.pRaw.toFixed(4)}:{};   // journal : probabilité d'avant
 function playerProps(R){
   const out=[];
   for(const side of ['home','away']){
@@ -2396,24 +2463,27 @@ function playerProps(R){
     const FRAC=ppF??T.ppFrac;
     const eG=sp?parts.reduce((a,x)=>a+x.gi*(1-x.p.ppGf),0)||1:1, pG=sp?parts.reduce((a,x)=>a+x.gi*x.p.ppGf,0)||1:1;
     const eP=sp?parts.reduce((a,x)=>a+x.pi*(1-x.p.ppPf),0)||1:1, pP=sp?parts.reduce((a,x)=>a+x.pi*x.p.ppPf,0)||1:1;
-    for(const {p,gi,si,pi,sh,min,xr,fS} of parts){
-      const lg=sp ? TG*(1-FRAC)*gi*(1-p.ppGf)/eG + TG*FRAC*gi*p.ppGf/pG : (gi/sumG)*TG;
+    // buts attendus de chacun avant (lgR) et après (lgS) le rétrécissement des parts (v3, 07/11/2026)
+    const lgR=parts.map(({p,gi})=>sp ? TG*(1-FRAC)*gi*(1-p.ppGf)/eG + TG*FRAC*gi*p.ppGf/pG : (gi/sumG)*TG);
+    const lgS=shareShrink(lgR,parts.map(x=>x.p));
+    for(const [i,{p,gi,si,pi,sh,min,xr,fS}] of parts.entries()){
+      const lg=lgS[i], shk=lgR[i]>0?lg/lgR[i]:1;
       // TIRS ATTENDUS CE SOIR (14/10/2026) : les tirs de l'équipe (moteur : son volume contre ce que concède
       // l'adversaire) répartis selon tirs/60 × minutes RÉCENTES × forme au tir — les ingrédients de son poids de
       // buteur. Avant : minutes de la saison (ls0, gardé au journal pour comparer sur les feuilles de match).
       // Buts attendus = tirs attendus × réussite retenue × ctx, ctx = ce qui fait passer de « tirs × réussite » au
       // total de buts simulé de l'équipe (gardien adverse, défense, marché, supériorité, filet désert, prolongation).
       const ls0=(si/sumS)*T.sog, ls=sumX>0?T.sog*xr/sumX:ls0;
-      const ctx=(sh>0&&ls>0)?lg/(ls*sh):null, rt=recentToi(p);
+      const ctx=(sh>0&&ls>0)?lgR[i]/(ls*sh):null, rt=recentToi(p);   // ajustement du MATCH, avant le rétrécissement de la part (lg = ls × sh × ctx × shk, 07/11/2026)
       const lp=(sp&&ppF==null) ? teamPts*(1-T.ppFrac)*pi*(1-p.ppPf)/eP + teamPts*T.ppFrac*pi*p.ppPf/pP : (pi/sumP)*teamPts;   // points : estimation ESPN non utilisée
-      const lgPP=sp ? TG*FRAC*gi*p.ppGf/pG : null;
+      const lgPP=sp ? TG*FRAC*gi*p.ppGf/pG*shk : null;
       // taux par 60 min de jeu normal / de supériorité (= taux par seconde × 3600)
       const g60s=(p.s60>0&&sh!=null)?p.s60*sh:p.g60;          // buts par 60 min selon la réussite de buteur
       const ev60=(p.ppTf<1)?g60s*(1-p.ppGf)/(1-p.ppTf):g60s, pp60=p.ppTf>0?g60s*p.ppGf/p.ppTf:null;
       out.push({
         side, team:T.abv, id:p.id, name:p.name, pos:p.pos, toi:p.toi, form:p.form, formS:p.formS, repl:!!p.repl, noHist:!!(p.noHist||p.repl),
         gp:p.gp, g:p.goals, pts:p.pts, sog:p.sog, prG:p.prG??null, prS:p.prS??null, prGP:p.prGP||0, shReg:sh??p.shReg??null, scMin:min,
-        lg, ls, lp, lgPP, ev60, pp60, ppToi:p.toi*(p.ppTf||0), ppMin:p.ppMin??null, ppEst:!!p.ppEst,
+        lg, lgR:lgR[i], pRaw:1-Math.exp(-lgR[i]), shk, ls, lp, lgPP, ev60, pp60, ppToi:p.toi*(p.ppTf||0), ppMin:p.ppMin??null, ppEst:!!p.ppEst,
         ls0, ctx, s60:p.s60, fS, rMin:rt?rt.min:null, rN:rt?rt.n:0, tSog:T.sog,
         pGoal:1-Math.exp(-lg), pTwo:pPoisAtLeast(2,lg),
         pPoint:1-Math.exp(-lp),
@@ -2922,6 +2992,7 @@ function pronoInfo(g,R){
       ['absents', pc(T.aG??1), (R.outN?.[side]||0)?`${R.outN[side]} retiré(s)`:'aucun'],
       ['domicile', isH?CFG.home-1:1-CFG.home, isH?'reçoit':'se déplace'],
       ['match la veille', T.b2b?CFG.b2b-1:0, T.b2b?'fatigue':'non'],
+      ['niveau du modèle', R.lv&&R.lv.k!==1?R.lv.k-1:null, R.lv&&R.lv.n>=LEVEL.nMin?`journal, ${R.lv.n} matchs`:'pas encore mesuré'],   // 07/11/2026
       ['marché (cotes)', R.mkt?(isH?R.mkt.kH:R.mkt.kA)-1:null, R.mkt?'':(S.odds[g.id]?((CFG.mktW||CFG.mktT)?'même avis que le modèle':'poids 0 : modèle seul'):'cotes non chargées')] ]; };
   const A=R.mkt?{w:R.mkt.wW, wT:R.mkt.wT, pM:fH?R.mkt.m.pH:R.mkt.m.pA, pK:R.mkt.pHk==null?null:(fH?R.mkt.pHk:1-R.mkt.pHk),
     tM:R.mkt.m.eTot, L:R.mkt.L, pO:R.mkt.pOk}:null;                    // modèle seul et marché, pour le favori retenu
@@ -2963,8 +3034,9 @@ function pronoListHTML(){
 const noteCls=n=>n>=6.5?'up':(n<=3.5?'dn':'');
 function atkNote(abv,L){
   const T=S.teams.get(abv); if(!T||!L) return null;
-  const fEff=CFG.lineupw*((L.fG??1)-1), base=T.gfpg*(1+fEff)*(L.aG??1);
-  return {note:clamp(5+25*(base/S.lg.gpg-1),0,10), gpm:base, gfpg:T.gfpg, form:fEff, abs:(L.aG??1)-1};
+  const lv=levelK().k;                                 // niveau du modèle seul (07/11/2026) : sinon la moyenne des équipes tombait sous 5
+  const fEff=CFG.lineupw*((L.fG??1)-1), base=T.gfpg*(1+fEff)*(L.aG??1)*lv;
+  return {note:clamp(5+25*(base/S.lg.gpg-1),0,10), gpm:base, gfpg:T.gfpg, form:fEff, abs:(L.aG??1)-1, lv:lv-1};
 }
 function gkNote(gk){
   if(!gk||gk.svEff==null) return null;
@@ -3172,14 +3244,15 @@ function scoTrackWarn(t=scoValTrack()){
 // marquent autant que la cote le dit). Avance sur le critère du 17/10 (60 cas) : 44 cas, mais 0,3 % par le hasard,
 // sous le seuil partagé de 1,25 %, et tes 14 paris perdus.
 const scoHiP=pg=>pg>=(CFG.scMaxP??DEF.scMaxP);
-function scoHiT(pg){ return `annoncé ${pct(pg,0)} : à ${pct(CFG.scMaxP??DEF.scMaxP,0)} et plus, jamais proposé en valeur — sur ces joueurs, le marché a raison (au 25/10, proposés « à valeur » depuis le 08/10 : 8 buts sur 44 pour 16,9 annoncés ; tes paris : 0 sur 14 ; les plus probables non signalés marquent, eux, comme annoncé)`; }
+function scoHiT(pg,sh=pg){ return `annoncé ${pct(sh,0)}${Math.abs(pg-sh)>=0.005?` (${pct(pg,0)} avant le rétrécissement des parts, l'échelle du garde-fou)`:''} : à ${pct(CFG.scMaxP??DEF.scMaxP,0)} et plus, jamais proposé en valeur — sur ces joueurs, le marché a raison (au 25/10, proposés « à valeur » depuis le 08/10 : 8 buts sur 44 pour 16,9 annoncés ; tes paris : 0 sur 14 ; les plus probables non signalés marquent, eux, comme annoncé)`; }
 // « jouable dès » : sans objet pour un joueur que le garde-fou écarte quelle que soit la cote
-function scoNeedTxt(pg,bold){ if(!(pg>0)) return '—'; if(scoHiP(pg)) return `<span class="dimtxt sco-hi" title="${escHtml(scoHiT(pg))}">—</span>`; const t=fmt((1+CFG.minEdge)/pg,2); return bold?`<b>${t}</b>`:t; }
+function scoNeedTxt(pg,bold,pr=pg){ if(!(pg>0)) return '—'; if(scoHiP(pr)) return `<span class="dimtxt sco-hi" title="${escHtml(scoHiT(pr,pg))}">—</span>`; const t=fmt((1+CFG.minEdge)/pg,2); return bold?`<b>${t}</b>`:t; }
 function scoGuard(p,o){
   if(!p||!(o>1)||!(p.pGoal>0)) return null;
-  if(p.pGoal>CFG.scGap/o) return {k:'gap',t:`écart suspect : ${pct(p.pGoal,0)} selon le modèle contre ${pct(1/o,0)} pour la cote (plus de ${fmt(CFG.scGap,1)} fois) — le marché sait peut-être quelque chose (rôle, ligne, blessure) ; montré, jamais proposé`};
-  if(posKey(p.pos)==='D'&&p.pGoal<CFG.scMinD) return {k:'d',t:`défenseur à ${pct(p.pGoal,0)} : sous ${pct(CFG.scMinD,0)}, jamais proposé (les défenseurs marquent rarement ; suivi du 07/10 : 0 sur 14)`};
-  if(scoHiP(p.pGoal)) return {k:'hi',t:scoHiT(p.pGoal)};
+  const pg=pgG(p), both=Math.abs(pg-p.pGoal)>=0.005?` (${pct(pg,0)} avant le rétrécissement des parts, l'échelle du garde-fou)`:'';   // 07/11/2026
+  if(pg>CFG.scGap/o) return {k:'gap',t:`écart suspect : ${pct(p.pGoal,0)} selon le modèle${both} contre ${pct(1/o,0)} pour la cote (plus de ${fmt(CFG.scGap,1)} fois) — le marché sait peut-être quelque chose (rôle, ligne, blessure) ; montré, jamais proposé`};
+  if(posKey(p.pos)==='D'&&pg<CFG.scMinD) return {k:'d',t:`défenseur à ${pct(p.pGoal,0)}${both} : sous ${pct(CFG.scMinD,0)}, jamais proposé (les défenseurs marquent rarement ; suivi du 07/10 : 0 sur 14)`};
+  if(scoHiP(pg)) return {k:'hi',t:scoHiT(pg,p.pGoal)};
   return null;
 }
 function scoBestTxt(g,R){
@@ -3262,19 +3335,20 @@ const SHOT_NOTE=()=>`Tirs/m et buts / tirs : saison en cours (en dessous : ${sea
 function xgOf(p){
   if(!p||p.repl||!(p.ls>0)||!(p.shReg>0)||!(p.lg>0)) return null;
   const seas=(p.toi||0)/60;
-  return {xs:p.ls, sh:p.shReg, k:p.ctx??p.lg/(p.ls*p.shReg), lg:p.lg, pG:p.pGoal, min:p.scMin??seas, seas,
+  return {xs:p.ls, sh:p.shReg, k:p.ctx??(p.lgR??p.lg)/(p.ls*p.shReg), lg:p.lg, pG:p.pGoal, min:p.scMin??seas, seas, shk:p.shk??1, m:shareM(p),
     rMin:p.rMin??null, rN:p.rN||0, fS:p.fS??p.formS??1, s60:p.s60??null, tSog:p.tSog??null};
 }
 function xgTip(p,x){
   return `Tirs attendus ce soir : ${fmt(x.xs,1)}${x.s60>0?` = ${fmt(x.s60,1)} tirs/60 × ${fmt(x.min,1)} min de jeu attendues (${x.rN?`${x.rN} dernier${x.rN>1?'s':''} match${x.rN>1?'s':''} : ${fmt(x.rMin,1)} min ; `:''}saison : ${fmt(x.seas,1)} min) × forme au tir ×${fmt(x.fS,2)}${x.tSog?`, ramenés aux ${fmt(x.tSog,1)} tirs attendus de ${p.team} contre cet adversaire`:''}`:''}. `
     +`Réussite retenue : ${pct(x.sh,1)}, soit un but tous les ${fmt(1/x.sh,1)} tirs (ses saisons récentes, ramenées vers la moyenne de son rôle). `
     +`Ajustement du match ×${fmt(x.k,2)} : ce qui fait passer de « tirs × réussite » au total de buts simulé de l'équipe (gardien adverse, défense, cotes du marché, supériorité numérique, filet désert, prolongation). `
-    +`Buts attendus : ${fmt(x.xs,2)} × ${pct(x.sh,1)} × ${fmt(x.k,2)} = ${fmt(x.lg,2)} → probabilité de marquer 1 − e^(−${fmt(x.lg,2)}) = ${pct(x.pG,1)}.`;
+    +(shkOn(x)?`Part de l'équipe ×${fmt(x.shk,2)} : sa part des buts de l'équipe ramenée de ${Math.round(100*SHARE.a)} % vers la moyenne de son poste (${pct(x.m,1)}) — les parts extrêmes se sont révélées exagérées (07/11/2026). `:'')
+    +`Buts attendus : ${fmt(x.xs,2)} × ${pct(x.sh,1)} × ${fmt(x.k,2)}${shkOn(x)?` × ${fmt(x.shk,2)}`:''} = ${fmt(x.lg,2)} → probabilité de marquer 1 − e^(−${fmt(x.lg,2)}) = ${pct(x.pG,1)}.`;
 }
 function xgLineHTML(p){ const x=xgOf(p); if(!x) return '';
-  return `<div class="xg-l dimtxt" title="${escHtml(xgTip(p,x))}">≈ ${fmt(x.xs,1)} tirs × ${pct(x.sh,1)} × ${fmt(x.k,2)} (match) = <b>${fmt(x.lg,2)} but</b> · ${fmt(x.min,0)}' de jeu${x.rN?` (${x.rN} dern. : ${fmt(x.rMin,0)}', saison ${fmt(x.seas,0)}')`:''}</div>`; }
+  return `<div class="xg-l dimtxt" title="${escHtml(xgTip(p,x))}">≈ ${fmt(x.xs,1)} tirs × ${pct(x.sh,1)} × ${fmt(x.k,2)} (match)${shkOn(x)?` × ${fmt(x.shk,2)} (part)`:''} = <b>${fmt(x.lg,2)} but</b> · ${fmt(x.min,0)}' de jeu${x.rN?` (${x.rN} dern. : ${fmt(x.rMin,0)}', saison ${fmt(x.seas,0)}')`:''}</div>`; }
 function xgCellHTML(p){ const x=xgOf(p); if(!x) return '<td class="mono dimtxt">—</td>';
-  return `<td class="mono" title="${escHtml(xgTip(p,x))}">${fmt(x.lg,2)}<div class="sh2">${fmt(x.xs,1)} t × ${pct(x.sh,1)} ×${fmt(x.k,2)}</div></td>`; }
+  return `<td class="mono" title="${escHtml(xgTip(p,x))}">${fmt(x.lg,2)}<div class="sh2">${fmt(x.xs,1)} t × ${pct(x.sh,1)} ×${fmt(x.k,2)}${shkOn(x)?` ×${fmt(x.shk,2)}`:''}</div></td>`; }
 // Classement : par VALEUR (probabilité du modèle × cote − 1) dès qu'il y a des cotes — un joueur à
 // 15 % payé 8,00 passe devant un joueur à 37 % payé 2,50 ; sinon, les plus probables avec leur « dès ».
 // Les joueurs sans historique NHL (recrues, rappelés de l'AHL) ne sont jamais classés : leur
@@ -3470,13 +3544,13 @@ function teamSheetHTML(g,R){
   const row=(lbl,f)=>`<tr><td class="l dimtxt">${lbl}</td><td>${f(a)}</td><td>${f(hm)}</td></tr>`;
   return `<details class="tsheet" open><summary>Fiche des équipes — attaque, gardiens, supériorité numérique</summary>
     <div class="tscroll"><table class="cmb tsheet-t"><tr><th class="l"></th><th>${a.abv}</th><th>${hm.abv}</th></tr>
-    ${row('Note attaque',x=>x.A?`${nt(x.A)} <span class="mono">${fmt(x.A.gpm,2)} buts/m</span> <span class="dimtxt">(saison ${fmt(x.A.gfpg,2)} · forme ${pcs(x.A.form)} · absents ${pcs(x.A.abs)})</span>`:'—')}
+    ${row('Note attaque',x=>x.A?`${nt(x.A)} <span class="mono">${fmt(x.A.gpm,2)} buts/m</span> <span class="dimtxt">(saison ${fmt(x.A.gfpg,2)} · forme ${pcs(x.A.form)} · absents ${pcs(x.A.abs)}${x.A.lv?` · niveau ${pcs(x.A.lv)}`:''})</span>`:'—')}
     ${row('Note gardien',x=>x.G?`${nt(x.G)} <b>${escHtml(x.gk.name)}</b> <span class="mono">SV eff. ${fmt(x.gk.svEff,3).replace('0.','.')}</span> <span class="dimtxt">(dont forme ${x.G.form>=0?'+':''}${fmt(x.G.form,3).replace('0.','.')})</span>`:'—')}
     ${row('Stats du gardien',x=>`<span style="font-size:11.5px">${gkStatsTxt(x.gk)}</span>`)}
     ${row('Supériorité numérique',x=>x.P&&x.P.pp!=null?`<b class="mono">${pct(x.P.pp,0)}</b> <span class="dimtxt">(${x.P.ppg} buts / ${x.P.ppo} occasions)</span> · <b class="mono">${fmt(x.P.ppoPG,1)}</b> occasions/match`:'<span class="dimtxt">pas encore de feuille de match</span>')}
     ${row('Infériorité numérique',x=>x.P&&x.P.pk!=null?`<b class="mono">${pct(x.P.pk,0)}</b> tuées <span class="dimtxt">(${x.P.opg} buts concédés / ${x.P.opo})</span> · <b class="mono">${fmt(x.P.pkPG,1)}</b> fois/match`:'—')}
     </table></div>
-    <div class="dimtxt" style="font-size:11px;margin-top:3px">Notes : 5 = moyenne de la ligue. Attaque : base offensive du moteur (forme et absents compris). Gardien : SV% effectif (saison régressée + forme). Supériorité : ${a.P||hm.P?`sur ${a.P?.n||0} et ${hm.P?.n||0} match(s) (30 derniers jours)`:'30 derniers jours'}${LG?` · ligue : ${pct(LG.pp,0)}, ${fmt(LG.ppoPG,1)} occasions/match`:''}${CFG.src==='espn'?' — information : avec la source ESPN, le moteur ne simule pas la supériorité à part.':''}</div>
+    <div class="dimtxt" style="font-size:11px;margin-top:3px">Notes : 5 = moyenne de la ligue. Attaque : base offensive du moteur (forme, absents et niveau du modèle compris). Gardien : SV% effectif (saison régressée + forme). Supériorité : ${a.P||hm.P?`sur ${a.P?.n||0} et ${hm.P?.n||0} match(s) (30 derniers jours)`:'30 derniers jours'}${LG?` · ligue : ${pct(LG.pp,0)}, ${fmt(LG.ppoPG,1)} occasions/match`:''}${CFG.src==='espn'?' — information : avec la source ESPN, le moteur ne simule pas la supériorité à part.':''}</div>
   </details>`;
 }
 function notesLineHTML(g,R){
@@ -4124,7 +4198,7 @@ function renderGames(){
                  <td class="mono">${fmt(p.g60,2)}</td><td>${formBadge(p.form)}</td>
                  <td class="mono">${fmt(gi,2)}</td><td class="mono">${fmt(si,1)}</td></tr>`).join('');
               return `<div><div class="sec">${T.abv} — λ ${fmt(T.lam,2)} buts / ${fmt(T.sog,1)} tirs · conv. ${pct(T.conv,1)}
-                <span class="dimtxt"> · forme alignement ×${fmt(T.fG,3)} · dispo ×${fmt(T.aG,3)} · ${T.split
+                <span class="dimtxt"> · forme alignement ×${fmt(T.fG,3)} · dispo ×${fmt(T.aG,3)}${R.lv&&R.lv.k!==1?` · niveau ×${fmt(R.lv.k,3)}`:''} · ${T.split
                   ?`jeu normal : déf. adv. ×${fmt(T.dFacEV,2)} · gardien ×${fmt(T.gFac,2)}${T.esOK?' (SV% forces égales)':' (SV% global)'} · <b>supériorité ${pct(T.ppFrac,0)} des buts</b>, infériorité adv. ×${fmt(T.pkFac,2)}, écart gardien ×${fmt(T.gSwap,2)}`
                   :`déf. adv. ×${fmt(T.dFac,2)} · gardien ×${fmt(T.gFac,2)} · toutes situations`}</span></div>
                 <table><thead><tr><th class="l">Patineur</th><th>TOI</th><th>B/60</th><th>Forme</th><th>xB</th><th>Tirs</th></tr></thead>
@@ -4182,7 +4256,7 @@ function bindBetForms(){
       if(sc){ const pid=+q('scp')?.value, pl=scorerPick(gid,pid), o=+String(q('scodd').value).replace(',','.');
         if(!pl){ out.textContent='choisis un joueur'; return; }
         const g0=S.games.find(x=>x.id===gid), ref=g0?oddFor(g0,pl):null, ev=o>1?pl.pGoal*o-1:null;
-        out.innerHTML=`<b>${escHtml(pl.name)} buteur</b> : ${pct(pl.pGoal,1)} selon le modèle${pl.hors?' <span class="dimtxt">s\'il joue (hors de l\'alignement prévu)</span>':''} · cote juste <b>${fmt(1/pl.pGoal,2)}</b> ${scoHiP(pl.pGoal)?`· <span class="warn sco-hi" title="${escHtml(scoHiT(pl.pGoal))}">annoncé ${pct(CFG.scMaxP,0)} et plus : jamais proposé (sur ces joueurs, le marché a raison)</span>`:`· jouable dès <b>${fmt((1+CFG.minEdge)/pl.pGoal,2)}</b>`}${ref?` · <span class="dimtxt">${ref.src==='US'?'cote US':'ta cote notée'} ${fmt(ref.o,2)}</span>`:''}${ev!=null?(()=>{ const gd=ev>=CFG.minEdge?scoGuard(pl,o):null; return ` · à ${fmt(o,2)} → valeur <b class="${ev>=CFG.minEdge?(gd?'dimtxt':'up'):(ev<0?'dn':'')}"${gd?` title="${escHtml(gd.t)}"`:''}>${ev>=0?'+':''}${(100*ev).toFixed(0)} %${gd?' · écarté':''}</b>`; })():''}${pl.noHist?' · <span class="warn">sans historique NHL : probabilité générique</span>':''}<br><span class="dimtxt">Règlement : un but, prolongation comprise (tirs au but exclus) ; joueur absent de la feuille de match = remboursé — vérifie la règle de ton bookmaker.</span>`;
+        out.innerHTML=`<b>${escHtml(pl.name)} buteur</b> : ${pct(pl.pGoal,1)} selon le modèle${pl.hors?' <span class="dimtxt">s\'il joue (hors de l\'alignement prévu)</span>':''} · cote juste <b>${fmt(1/pl.pGoal,2)}</b> ${scoHiP(pgG(pl))?`· <span class="warn sco-hi" title="${escHtml(scoHiT(pgG(pl),pl.pGoal))}">annoncé ${pct(CFG.scMaxP,0)} et plus : jamais proposé (sur ces joueurs, le marché a raison)</span>`:`· jouable dès <b>${fmt((1+CFG.minEdge)/pl.pGoal,2)}</b>`}${ref?` · <span class="dimtxt">${ref.src==='US'?'cote US':'ta cote notée'} ${fmt(ref.o,2)}</span>`:''}${ev!=null?(()=>{ const gd=ev>=CFG.minEdge?scoGuard(pl,o):null; return ` · à ${fmt(o,2)} → valeur <b class="${ev>=CFG.minEdge?(gd?'dimtxt':'up'):(ev<0?'dn':'')}"${gd?` title="${escHtml(gd.t)}"`:''}>${ev>=0?'+':''}${(100*ev).toFixed(0)} %${gd?' · écarté':''}</b>`; })():''}${pl.noHist?' · <span class="warn">sans historique NHL : probabilité générique</span>':''}<br><span class="dimtxt">Règlement : un but, prolongation comprise (tirs au but exclus) ; joueur absent de la feuille de match = remboursé — vérifie la règle de ton bookmaker.</span>`;
         return; }
       // combiné coché : une seule cote à saisir ; sinon, une cote par jambe
       box.querySelectorAll('[data-legodd]').forEach(el=>el.style.display=combo?'none':'');
@@ -4317,7 +4391,7 @@ function renderProps(){
       if(team){ const Tm=S.teams.get(team), ids=new Set(R.players.filter(p=>p.side===side).map(p=>p.id));
         for(const sk of (Tm?.skaters||[])){ if(sk.id<=0||ids.has(sk.id)) continue; const ip=ifPlayed(R,side,sk); if(!ip) continue;
           const rt=recentToi(sk);
-          rows.push({...sk,side,team,g:sk.goals,pGoal:ip.pGoal,lg:ip.lg,shReg:ip.sh,scMin:ip.min,hors:true,inj:CFG.src==='espn'&&ESPN_OUT.has(sk.id),opp,gk,gid:g.id,
+          rows.push({...sk,side,team,g:sk.goals,pGoal:ip.pGoal,lg:ip.lg,pRaw:ip.pRaw,shk:ip.shk,shReg:ip.sh,scMin:ip.min,hors:true,inj:CFG.src==='espn'&&ESPN_OUT.has(sk.id),opp,gk,gid:g.id,
             ...(ip.xs>0?{ls:ip.xs,ctx:ip.ctx,pS2:pPoisAtLeast(2,ip.xs),pS3:pPoisAtLeast(3,ip.xs),pS4:pPoisAtLeast(4,ip.xs)}:{}),fS:sk.formS||1,rMin:rt?rt.min:null,rN:rt?rt.n:0,tSog:R[side].sog}); } }
     }
   }
@@ -4338,7 +4412,7 @@ function renderProps(){
     <td class="mono">${fmt(p.ev60,2)} · ${p.pp60!=null&&p.ppToi>30?fmt(p.pp60,2):'—'}</td>
     <td>${formBadge(p.form)}</td>${shotCellsHTML(p.sp)}${xgCellHTML(p)}
     <td class="mono ${p.pGoal>=0.30&&!p.hors?'lamp':''}">${pct(p.pGoal,1)}${p.hors?' <span class="dimtxt">s\'il joue</span>':''}</td><td class="mono dimtxt">${odd(p.pGoal)}</td>
-    <td class="mono">${scoNeedTxt(p.pGoal,false)}</td>
+    <td class="mono">${scoNeedTxt(p.pGoal,false,pgG(p))}</td>
     <td class="mono dimtxt">${p.us?fmt(p.us.o,2):'—'}</td>
     <td><input class="sco-in" type="number" step="0.01" min="1.01" placeholder="cote" data-sco="${p.gid}:${p.id}" value="${scoOdd(p.gid,p.id)||''}"></td>
     <td class="mono" data-scov="${p.gid}:${p.id}">${p.noHist?'<span class="dimtxt" title="sans historique NHL : taux générique">n.c.</span>':scoValTxt(p.pGoal,p.x?p.x.o:null,p)}</td>
@@ -4926,17 +5000,17 @@ function snapEntry(g,R){
   }), bets=MBj.main.map(jb), bx=MBj.side.map(jb);
   return {
     date:S.date, gameId:g.id, away:g.away.abv, home:g.home.abv,
-    pH:R.pH, pA:R.pA, eH:R.eH, eA:R.eA, eTot:R.eTot,
+    pH:R.pH, pA:R.pA, eH:R.eH, eA:R.eA, eTot:R.eTot, lvK:+(R.lv?.k??1).toFixed(4),   // lvK : facteur de niveau appliqué (07/11/2026)
     line:CFG.line, pOver:R.over[CFG.line], reg:R.reg,
     mktLine:(()=>{const o=S.odds[g.id]; if(!o?.over) return null;
       const pts=Object.keys(o.over).map(Number); if(!pts.length) return null;
       return pts.sort((x,y)=>Math.abs(x-6.0)-Math.abs(y-6.0))[0];})(),
     gkH:R.home.goalie?.name||null, gkA:R.away.goalie?.name||null,
     combo:(()=>{ const c=comboPick(g,R); return c?{b:c.base,k:c.k,L:c.L,s:c.s,p:c.p,...(c.alt?{a:{L:c.alt.L,s:c.alt.s,p:c.alt.p}}:{})}:null; })(),   // a : variante (11/10/2026)
-    sc:(R.players||[]).slice(0,3).map(p=>({id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:2,...xsOf(p)})),   // 3 buteurs les plus probables (sv : version de la répartition)
+    sc:(R.players||[]).slice(0,3).map(p=>({id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:3,...xsOf(p),...prOf(p)})),   // 3 buteurs les plus probables (sv : version de la répartition ; 3 = parts rétrécies, pr = probabilité d'avant)
     // buteurs à valeur (cote ≥ « dès ») : proposés (scv) et écartés par les garde-fous (scx), version 2 (08/10/2026)
     ...(()=>{ const all=(R.players||[]).filter(p=>!p.noHist).map(p=>{ const x=oddFor(g,p); if(!x) return null; const v=p.pGoal*x.o-1; if(v<CFG.minEdge) return null;
-        const gd=scoGuard(p,x.o); return {id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),o:x.o,src:x.src,v,pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:2,...xsOf(p),...(gd?{g:gd.k}:{})}; })
+        const gd=scoGuard(p,x.o); return {id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),o:x.o,src:x.src,v,pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:3,...xsOf(p),...prOf(p),...(gd?{g:gd.k}:{})}; })
         .filter(Boolean).sort((a,b)=>b.v-a.v);
       return {scv:all.filter(x=>!x.g).slice(0,3), scx:[...all.filter(x=>x.g&&x.g!=='hi').slice(0,3),...all.filter(x=>x.g==='hi').slice(0,3)]}; })(),   // 'hi' (25/10/2026) : 3 de plus, pour juger ce garde-fou sans évincer les autres
     // distribution des buts du match (total 0…14, chaque équipe 0…7+) : vérification des scores prédits (08/10/2026)
@@ -5195,6 +5269,7 @@ function scoreCheckHTML(D){
     if(KM.length>=10){ const y=x=>x.e.res.tot>5.5?1:0, bri=f=>fmt(mean(KM.map(x=>(f(x)-y(x))**2)),3), lvl=f=>fmt(mean(KM.map(f)),2);
       tmix+=` <b>Marché seul</b> (total implicite de sa cote, ${KM.length} matchs) : r = ${sg(corr(KM.map(x=>x.mu),KM.map(x=>x.e.res.tot)))} · erreur moyenne ${fmt(mean(KM.map(x=>Math.abs(x.e.res.tot-x.mu))),2)}. <span class="tot-k">Niveau : réel ${lvl(x=>x.e.res.tot)} · retenu ${lvl(x=>x.e.eTot)} · modèle seul ${lvl(x=>x.e.eTotM)} · marché ${lvl(x=>x.mu)} — « plus de 5,5 » (Brier, plus bas = mieux) : retenu ${bri(x=>x.e.pOver)} · modèle seul ${bri(x=>x.e.pOverM)} · marché ${bri(x=>pPoisAtLeast(6,x.mu))}.</span>`; } }
   else tmix=`<br><b>Total retenu (modèle + marché)</b> : comparé au modèle seul dès 10 matchs journalisés avec des cotes (${TM.length} pour l'instant). Avant le 09/10 : ligne du marché r = +0,24, modèle seul r = 0,00 sur 56 matchs.`;
+  tmix+=levelNoteHTML();                               // niveau du modèle seul corrigé (07/11/2026)
   const sum=`${Math.abs(b)<=ci?'aucun biais démontré':`biais ${sg(b)} but`} · écarts entre équipes ${rDiff>t1?'distingués':'pas encore démontrés'} · totaux d'un match à l'autre ${rTot>t1?'distingués':'pas encore distingués'}`;
   return `<details class="score-check" style="margin:0 0 10px"><summary><b>Vérification des scores prédits</b> — ${n} matchs : ${sum}</summary><p class="note" style="margin:6px 0 0">
     <b>Niveau</b> : total prévu ${fmt(mean(eT),2)} → réel ${fmt(mean(rT),2)} (biais ${sg(b)} ± ${fmt(ci,2)} à 95 % : ${Math.abs(b)<=ci?'pas de biais démontré':'<span class="warn">biais démontré</span>'}) · domicile ${sg(bH)} ± ${fmt(ciH,2)} · extérieur ${sg(bA)} ± ${fmt(ciA,2)}.<br>
@@ -5988,7 +6063,14 @@ function exportJson(){
     forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(), compos:{dernier:COMPO_LAST,enAttente:COMPO_WAIT.length}, cotes:{mode:oddsModeOf(),releve:S.oddsAt?new Date(S.oddsAt).toISOString():null,matchs:Object.keys(S.odds).length},
     // pronostic retenu = modèle + marché (09/10/2026) : poids, matchs cotés, matchs ancrés, résimulations
     ancrage:(()=>{ const P=[...S.proj.values()], A=P.filter(R=>R.mkt); return {poids:[CFG.mktW??null,CFG.mktT??null], cotes:Object.keys(S.odds||{}).length, ancres:A.length,
-      essais:A.map(R=>R.mkt.it), ecartMax:A.length?+Math.max(...A.map(R=>Math.abs(R.pH-R.mkt.tW))).toFixed(4):null}; })()};
+      essais:A.map(R=>R.mkt.it), ecartMax:A.length?+Math.max(...A.map(R=>Math.abs(R.pH-R.mkt.tW))).toFixed(4):null}; })(),
+    // niveau du modèle seul (07/11/2026) : facteur appliqué, repères de ligue, facteurs moyens des projections et des équipes du jour
+    niveau:levelK(), ligue:{gpg:S.lg.gpg??null, sv:S.lg.sv??null, sog:S.lg.sog??null, esSv:S.lg.esSv??null, pk:S.lg.pk??null, pp:S.lg.pp??null},
+    facteurs:(()=>{ const T=[...S.proj.values()].flatMap(R=>[['home',R],['away',R]]).filter(([s,R])=>R&&R[s]).map(([s,R])=>({...R[s],lam0:R[s].lam/((s==='home'?R.mkt?.kH:R.mkt?.kA)||1)}));
+      const m=f=>{ const v=T.map(f).filter(x=>x!=null&&isFinite(x)); return v.length?+(v.reduce((a,b)=>a+b,0)/v.length).toFixed(4):null; };
+      return {n:T.length, lam:m(t=>t.lam0), aG:m(t=>t.aG), fG:m(t=>t.fG), dFac:m(t=>t.dFac), gFac:m(t=>t.gFac), b2b:T.filter(t=>t.b2b).length}; })(),
+    equipes:(()=>{ const T=[...S.teams.values()], m=f=>{ const v=T.map(f).filter(x=>x!=null&&isFinite(x)); return v.length?+(v.reduce((a,b)=>a+b,0)/v.length).toFixed(4):null; };
+      return {n:T.length, gfpg:m(t=>t.gfpg), gapg:m(t=>t.gapg), sogpg:m(t=>t.sogpg), sogAgainst:m(t=>t.sogAgainst), wCur:m(t=>t.cold?.wCur), offPrior:m(t=>t.cold?.offPrior), gaPrior:m(t=>t.cold?.gaPrior), kG:m(t=>t.cold?.kG)}; })()};
   const blob=new Blob([JSON.stringify({v:'nhlvb-v2',exported:new Date().toISOString(),cfg:CFG,log:S.log,bets:S.bets,picks:S.picks,diag},null,2)],{type:'application/json'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob); a.download=`nhl_value_board_${todayISO()}.json`; a.click();
@@ -6605,7 +6687,7 @@ function runSelfTest(){
       (dT>=0?'+':'')+fmt(dT,3)+' but/match en moyenne (l\'ancien moteur : +0,38)');
   const enAvg=projs.reduce((a,R)=>a+(R.diag?.en??0),0)/projs.length;
   add('Buts dans un filet désert par match',enAvg>0.28&&enAvg<0.56,fmt(enAvg,3)+' (réf. ≈ 0,42)');
-  add('SV% de référence de la ligue',S.lg.sv>0.893&&S.lg.sv<0.915,
+  add('SV% de référence de la ligue',S.lg.sv>=0.885&&S.lg.sv<0.915,                // 07/11/2026 : ligue à ,890 cette saison
       fmt(S.lg.sv,4)+' hors filet désert et tirs de barrage · tirs/match '+fmt(lgSog(),1)+(S.lg.sog&&S.lg.sog!==LEAGUE.sogPerGame?' (API)':' (repère fixe)'));
   const pdoT=[...S.teams.values()].filter(t=>t.cold?.pdo);
   if(pdoT.length){

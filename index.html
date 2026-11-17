@@ -576,7 +576,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-11-12';
+const BUILD='2026-11-17';
 const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
@@ -844,6 +844,7 @@ const ESPN2NHL={NJ:'NJD',TB:'TBL',LA:'LAK',SJ:'SJS',UTAH:'UTA'};
 const ESPN_TID={BOS:1,BUF:2,CGY:3,CHI:4,DET:5,EDM:6,CAR:7,LAK:8,DAL:9,MTL:10,NJD:11,NYI:12,NYR:13,OTT:14,PHI:15,
   PIT:16,COL:17,SJS:18,STL:19,TBL:20,TOR:21,VAN:22,WSH:23,ANA:25,FLA:26,NSH:27,WPG:28,CBJ:29,MIN:30,VGK:37,SEA:124292,UTA:129764};
 const ESPN_PROB={}, ESPN_EVT={}, ESPN_CHECK={}, EMEM=new Map(), ESPN_STATS=new Map();
+const ESPN_LEAD_MAX=6;          // total de temps de glace en avance sur le bilan ESPN : jusqu'à 6 matchs tolérés (17/11/2026)
 const nhlAbv=a=>ESPN2NHL[a]||a;
 const espnYear=season=>+String(season).slice(4);            // '20262027' → 2027 (ESPN nomme la saison par son année de fin)
 const ymd=iso=>String(iso).replace(/-/g,'');
@@ -1029,13 +1030,24 @@ function espnParseAthlete(a,names){
   // refusés pour ce seul décalage, saison en cours ignorée). Signature exacte de ce retard : moyenne × (MJ − 1)
   // retombe sur un nombre entier de secondes (l'ancien total) et le reste (le dernier match) est un match plausible
   // (0 à 1,6 fois la moyenne + 2 min, 65 min au plus : des matchs joués en retard laisseraient environ DEUX matchs).
-  // Le temps par match retenu est alors total / matchs, à jour. Matchs joués en retard sur les totaux : refusé.
+  // Le temps par match retenu est alors total / matchs, à jour. Matchs joués en retard sur les totaux : refusé jusqu'au
+  // 17/11/2026 — c'était en fait tout le bilan qui était en retard sur le seul total (« total en avance », ci-dessous).
   const tExact = TOI<=0 || Math.abs(TOI-GP*TOIg)<=GP*1.5+2;
   const prevT = TOIg*(GP-1), lastT = TOI-prevT;
   const tLag = !tExact && TOI>0 && (GP>=2
       ? TOIg>0 && Math.abs(prevT-Math.round(prevT))<=0.005*(GP-1)+0.002 && lastT>=-2 && lastT<=Math.min(3900,1.6*TOIg+120)
       : TOIg<=0 && TOI<=3900);
-  const c = GP>0 ? {p:Math.abs(P-G-A)<0.5, s:(S===0||Math.abs(100*G/S-SHP)<0.2), t:tExact||tLag, lag:tLag} : null;
+  // TOTAL EN AVANCE (17/11/2026). Export du 17/11 : 391 patineurs sur 774 refusés, tous sur le temps de glace, saison en
+  // cours ignorée. Cette fois, matchs joués, buts, passes, tirs ET moyenne forment un bilan cohérent arrêté un ou plusieurs
+  // matchs plus tôt (moyenne × matchs = ancien total, entier) ; seul le TOTAL de temps de glace compte déjà les derniers
+  // matchs. Vérifié sur McDavid : ESPN 21 MJ · 11 b · 39 p · 29 842 s pour 1 355,95 s par match = son bilan après son
+  // 21e match (NHL.com, 14/11 : 11 b, 39 p) ; le 22e (15/11 : 1 b, 2 p) n'est que dans le total (28 475 + 1 367 s).
+  // Bilan pris tel quel, temps par match = la moyenne ESPN (cohérente avec ses matchs et ses buts).
+  const curT = TOIg*GP, aheadT = TOI-curT;
+  const tLead = !tExact && !tLag && TOI>0 && GP>=1 && TOIg>0 && Math.abs(curT-Math.round(curT))<=0.005*GP+0.002
+      && aheadT>=-2 && aheadT<=(ESPN_LEAD_MAX+0.5)*TOIg;        // au plus 6 matchs (de temps moyen) d'avance
+  const c = GP>0 ? {p:Math.abs(P-G-A)<0.5, s:(S===0||Math.abs(100*G/S-SHP)<0.2), t:tExact||tLag||tLead, lag:tLag,
+      lead:tLead?Math.min(ESPN_LEAD_MAX,Math.max(1,Math.round(aheadT/TOIg))):0, ahead:tLead?Math.round(aheadT):0} : null;
   const ok = c ? (c.p&&c.s&&c.t) : null;
   return {...base, isG:false, toi:tLag?TOI/GP:TOIg, goals:G, ast:A, pts:P, shots:S, ppg:PPG, _chk:ok, _c:c, _raw:(c&&!ok)?{G,A,P,S,SHP,GP,TOI,TOIg}:undefined};
 }
@@ -1065,6 +1077,10 @@ async function espnSeasonStats(season){
       return `${q.first} ${q.last} (${q.teamAbv||'?'}) : ${r.GP} MJ · ${r.G} b + ${r.A} p = ${r.P} pts · ${r.S} tirs à ${f2(r.SHP)} % · temps total ${f2(r.TOI)} pour ${f2(r.TOIg)} par match`; });
     ESPN_CHECK[Y].fails={pts:fP,shp:fS,toi:fT,ex:exs};
     ESPN_CHECK[Y].lagT=sk.filter(q=>q._c.lag).length;        // moyenne de temps de glace en retard d'un match, tolérée
+    { const ld=sk.filter(q=>q._c.lead), K={};                // bilans en retard sur le total de temps de glace (17/11/2026)
+      for(const q of ld) K[q._c.lead]=(K[q._c.lead]||0)+1;
+      ESPN_CHECK[Y].leadT=ld.length; ESPN_CHECK[Y].leadK=K;
+      ESPN_CHECK[Y].leadEx=ld.slice().sort((a,b)=>b.gp-a.gp).slice(0,2).map(q=>`${q.first} ${q.last} (${q.teamAbv||'?'}) : ${q.gp} MJ · ${q.goals} b + ${q.ast} p · ${q.shots} tirs · temps total = ${q.gp} × ${+q.toi.toFixed(2)} s + ${q._c.ahead} s`); }
     if(chk>=30 && ok/chk<0.9) throw new Error(`format ESPN inattendu (contrôles réussis ${ok}/${chk} — en échec : points ${fP}, réussite ${fS}, temps de glace ${fT}${exs.length?' ; ex. '+exs.join(' ; '):''})`);
     if(agg && reg.length>=30 && !(agg.spg>0.6&&agg.spg<4&&agg.sh>0.05&&agg.sh<0.18))
       throw new Error(`format ESPN inattendu (tirs/match ${agg.spg.toFixed(2)}, réussite ${(100*agg.sh).toFixed(1)} %)`);
@@ -3369,7 +3385,8 @@ function shotCellsHTML(sp){
     +`<td class="mono" title="${t}"><span class="${lk('cur')}">${sp.cur?bt(sp.cur):'—'}</span>${second('bt')}</td>`
     +`<td class="mono" title="${escHtml('Réussite au tir que le modèle retient pour lui : ses deux dernières saisons, ramenées vers la moyenne de son poste (12 % attaquant, 5,5 % défenseur, 300 tirs d\'a priori). Sa probabilité de but = ses tirs × cette réussite.')}">${pct(sp.norm,1)}</td>`;
 }
-const SHOT_NOTE=()=>`Tirs/m et buts / tirs : saison en cours (en dessous : ${seasonLbl(prevSeason(S.season))}). Habituelle : la réussite au tir que le modèle retient pour le joueur — sa probabilité de but repose sur ses tirs × cette réussite, pas sur la réussite du moment. « chance » / « malchance » : ses buts s'écartent de ses tirs × sa réussite habituelle plus que le hasard ne l'explique (moins de 5 %) ; « volume » : au moins ${fmt(SHOT_VOL.F,1)} tirs attendus ce soir (${fmt(SHOT_VOL.D,1)} pour un défenseur).`;
+const SHOT_NOTE=()=>(w=>w?`<b class="warn">Saison en cours indisponible (${w} — voir le bandeau en haut de la page) : « — » = aucun match de cette saison lu ; projections sur ${seasonLbl(prevSeason(S.season))} et la forme récente.</b> `:'')(curDownWhy())
+  +`Tirs/m et buts / tirs : saison en cours (en dessous : ${seasonLbl(prevSeason(S.season))}). Habituelle : la réussite au tir que le modèle retient pour le joueur — sa probabilité de but repose sur ses tirs × cette réussite, pas sur la réussite du moment. « chance » / « malchance » : ses buts s'écartent de ses tirs × sa réussite habituelle plus que le hasard ne l'explique (moins de 5 %) ; « volume » : au moins ${fmt(SHOT_VOL.F,1)} tirs attendus ce soir (${fmt(SHOT_VOL.D,1)} pour un défenseur).`;
 // BUTS ATTENDUS, PAS À PAS (14/10/2026). Demande : « prendre en compte le nombre de tirs par joueur et un ratio
 // pour un nombre de buts attendu, basé sur la forme des joueurs, leur TOI, T/B ». C'est la répartition v2 depuis le
 // 08/10 (tirs/60 × réussite × minutes récentes × forme au tir) ; elle est désormais montrée telle quelle :
@@ -4079,9 +4096,20 @@ function curErrBanner1(){
   const st=STORE_ERR?`<div class="verdict v-no" style="margin:0 0 12px"><div class="v-t">STOCKAGE DU NAVIGATEUR PLEIN</div><div class="v-b">Écriture impossible : ${escHtml(STORE_ERR)}. Exporte tes données (Réglages → Exporter), puis « Vider le cache ».</div></div>`:'';
   return st+curErrBanner0()+creditBanner();
 }
+// Équipes dont la saison en cours est vide alors que le classement compte des matchs (cold.stale) : sans erreur ni rejet,
+// c'est qu'aucun joueur n'a été rattaché à son équipe — cas silencieux jusqu'au 17/11/2026 (l'auto-test disait « oui »).
+function curStaleN(){ let n=0, of=0; for(const t of S.teams.values()){ of++; if(t.cold?.stale) n++; } return {n,of}; }
+const curStaleAll=()=>{ const z=curStaleN(); return z.n>0&&2*z.n>=z.of; };
+const leadKTxt=K=>Object.entries(K||{}).map(([k,n])=>`${n} de ${k} match${+k>1?'s':''}`).join(', ');
+// Raison courte de l'absence de la saison en cours, pour la légende du tableau des buteurs (17/11/2026 : les « — » se
+// voyaient là, le bandeau qui les expliquait était en haut de la page).
+function curDownWhy(){ if(S.curErr) return 'statistiques ESPN refusées'; if(CFG.src==='espn'&&ESPN_CHECK.curRejected) return 'statistiques ESPN ignorées';
+  if(curStaleAll()){ const z=curStaleN(); return `aucun joueur rattaché à son équipe pour ${z.n} équipe${z.n>1?'s':''} sur ${z.of}`; } return ''; }
 function curErrBanner0(){
+  const z=curStaleN();
   const why=S.curErr?`Statistiques de la saison en cours indisponibles (${escHtml(S.curErr)})`
-    : (CFG.src==='espn'&&ESPN_CHECK.curRejected)?`Statistiques de la saison en cours ignorées (${escHtml(ESPN_CHECK.curRejected)})`:'';
+    : (CFG.src==='espn'&&ESPN_CHECK.curRejected)?`Statistiques de la saison en cours ignorées (${escHtml(ESPN_CHECK.curRejected)})`
+    : curStaleAll()?`Statistiques de la saison en cours absentes pour ${z.n} équipe${z.n>1?'s':''} sur ${z.of} : aucun joueur de cette saison rattaché à son équipe, alors que le classement compte des matchs`:'';
   return why?`<div class="verdict v-chk" style="margin:0 0 12px"><div class="v-t">PROJECTIONS SUR LA SAISON PASSÉE SEULE</div>
     <div class="v-b">${why}. Les projections restent calculées, comme le soir d'ouverture, mais sans les matchs de cette saison. Envoie-moi ce message s'il persiste.</div></div>`:'';
 }
@@ -6133,7 +6161,7 @@ function exportJson(){
   // diagnostics (06/10/2026) : ce qui aidait à comprendre un problème et demandait une capture d'écran
   const yc=CFG.src==='espn'?espnYear(S.season||'20262027'):null, ck=yc?ESPN_CHECK[yc]:null;
   const diag={version:BUILD,rev:BUILD_REV,cfgv:CFG.cfgv,newer:S.newerBuild||logNewerBuild()||S.cfgNewer||null,at:new Date().toISOString(),src:CFG.src,date:S.date,games:S.games.length,proj:S.proj.size,
-    saisonEnCours:{erreur:S.curErr||null,ignoree:ESPN_CHECK.curRejected||null,controles:ck?{lignes:ck.n,reussis:ck.ok,sur:ck.chk,gardiens:`${ck.gok}/${ck.gchk}`,echecs:ck.fails||null,moyenneEnRetard:ck.lagT??null}:null},
+    saisonEnCours:{erreur:S.curErr||null,ignoree:ESPN_CHECK.curRejected||null,equipesSansSaison:(z=>`${z.n}/${z.of}`)(curStaleN()),controles:ck?{lignes:ck.n,reussis:ck.ok,sur:ck.chk,gardiens:`${ck.gok}/${ck.gchk}`,echecs:ck.fails||null,moyenneEnRetard:ck.lagT??null,totalEnAvance:ck.leadT??null,avanceMatchs:ck.leadK||null,exAvance:ck.leadEx||null}:null},
     forme:{...BOX_STAT}, stockage:storeUsage(), erreurStockage:STORE_ERR, credits:S.credits||null, creditsJour:credBudget(), creditsLog:CRED_LOG.slice(-200), sims:CFG.sims, synchro:syncDiag(), compos:{dernier:COMPO_LAST,enAttente:COMPO_WAIT.length}, cotes:{mode:oddsModeOf(),releve:S.oddsAt?new Date(S.oddsAt).toISOString():null,matchs:Object.keys(S.odds).length},
     // pronostic retenu = modèle + marché (09/10/2026) : poids, matchs cotés, matchs ancrés, résimulations
     ancrage:(()=>{ const P=[...S.proj.values()], A=P.filter(R=>R.mkt); return {poids:[CFG.mktW??null,CFG.mktT??null], cotes:Object.keys(S.odds||{}).length, ancres:A.length,
@@ -6841,10 +6869,12 @@ function runSelfTest(){
   if(CFG.src==='espn'){
     const yP=espnYear(prevSeason(S.season)), cP=ESPN_CHECK[yP];
     { const u=storeUsage(); add('Stockage du navigateur',!STORE_ERR&&u.ko<4000,`${u.ko} Ko utilisés sur ≈ 5 000 (journal ${u.z.journal}, paris ${u.z.paris}, feuilles de match ${u.z.feuilles}, cache ${u.z.cache}, autres ${u.z.autres})${STORE_ERR?' — ÉCHEC : '+STORE_ERR:''}`); }
-    add('Saison en cours utilisée',!S.curErr&&!ESPN_CHECK.curRejected,S.curErr?`non : ${S.curErr} — projections sur la saison passée seule`:(ESPN_CHECK.curRejected?`ignorée : ${ESPN_CHECK.curRejected}`:'oui'));
+    { const z=curStaleN();
+      add('Saison en cours utilisée',!S.curErr&&!ESPN_CHECK.curRejected&&!curStaleAll(),S.curErr?`non : ${S.curErr} — projections sur la saison passée seule`:(ESPN_CHECK.curRejected?`ignorée : ${ESPN_CHECK.curRejected}`
+        :curStaleAll()?`non : aucun joueur de cette saison rattaché à son équipe pour ${z.n} équipe(s) sur ${z.of} — projections sur la saison passée seule`:`oui${z.n?` (vide pour ${z.n} équipe(s) sur ${z.of})`:''}`)); }
     { const yC=espnYear(S.season), cC=ESPN_CHECK[yC];
       if(cC) add('Source ESPN : format de la saison en cours', cC.chk===0||cC.ok/cC.chk>=0.9,
-        `saison ${yC-1}-${String(yC).slice(2)} : ${cC.n} joueurs · contrôles patineurs ${cC.ok}/${cC.chk}${cC.lagT?` (dont ${cC.lagT} avec la moyenne de temps de glace en retard d'un match, tolérée : temps par match = total / matchs)`:''}${cC.fails&&cC.ok<cC.chk?` · en échec : points ${cC.fails.pts}, réussite ${cC.fails.shp}, temps de glace ${cC.fails.toi}`:''}`); }
+        `saison ${yC-1}-${String(yC).slice(2)} : ${cC.n} joueurs · contrôles patineurs ${cC.ok}/${cC.chk}${cC.lagT?` (dont ${cC.lagT} avec la moyenne de temps de glace en retard d'un match, tolérée : temps par match = total / matchs)`:''}${cC.leadT?` · ${cC.leadT} bilans ESPN en retard sur leur temps de glace total (${leadKTxt(cC.leadK)}), tolérés : bilan pris tel quel, temps par match = moyenne ESPN`:''}${cC.fails&&cC.ok<cC.chk?` · en échec : points ${cC.fails.pts}, réussite ${cC.fails.shp}, temps de glace ${cC.fails.toi}`:''}`); }
     add('Source ESPN : format des statistiques', !!cP && cP.ok===cP.chk && (cP.gchk===0||cP.gok/cP.gchk>=0.9),
         cP?`saison ${yP-1}-${String(yP).slice(2)} : ${cP.n} joueurs · contrôles patineurs ${cP.ok}/${cP.chk} · gardiens ${cP.gok}/${cP.gchk} · colonnes ${cP.named?'par leur nom':'par position vérifiée'}${cP.agg?` · ${fmt(cP.agg.spg,2)} tirs/match, ${(100*cP.agg.sh).toFixed(1)} % de réussite`:''}`
           :'statistiques ESPN non chargées');

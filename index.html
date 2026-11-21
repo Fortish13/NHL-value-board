@@ -576,7 +576,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-11-17';
+const BUILD='2026-11-21';
 const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
@@ -2415,8 +2415,9 @@ function ifPlayed(R,side,p){
   const min=scMinutes(p), sh=scorerSh(p,min), fS=p.formS||1;
   const w=(p.s60>0&&sh!=null)?p.s60*sh*min*sc/60*fS:(p.g60||0)*min*sc/60;
   const TGp=T.gPl??T.lam, lgR=TGp*w/sumW;
-  // même rétrécissement que les alignés (v3, 07/11/2026) : sa part ramenée vers la moyenne du poste, normalisée comme l'alignement
-  const z=(1-SHARE.a)+SHARE.a*P.reduce((a,x)=>a+shareM(x.p),0), lg=TGp*((1-SHARE.a)*w/sumW+SHARE.a*shareM(p))/z;
+  // même rétrécissement que les alignés (v3, 07/11/2026) : sa part ramenée vers la moyenne du poste, normalisée comme l'alignement ;
+  // α = 0 depuis le 21/11/2026 (v4) : lg = lgR exactement (sans le détour du calcul, à un arrondi près une fois sur trois)
+  const z=(1-SHARE.a)+SHARE.a*P.reduce((a,x)=>a+shareM(x.p),0), lg=SHARE.a>0?TGp*((1-SHARE.a)*w/sumW+SHARE.a*shareM(p))/z:lgR;
   const sumX=P.reduce((a,x)=>a+x.xr,0), xr=p.s60>0?p.s60*min*sc/60*fS:0, xs=sumX>0?T.sog*xr/sumX:null;   // tirs « s'il joue » (14/10/2026)
   return {pGoal:1-Math.exp(-lg),lg,pRaw:1-Math.exp(-lgR),lgR,shk:lgR>0?lg/lgR:1,sh,min,xs,ctx:(sh>0&&xs>0)?lgR/(xs*sh):null};
 }
@@ -2445,7 +2446,13 @@ function scorerOptions(g,R){
 // hors échantillon dans 72 à 80 % des partages. Après : plus probables 156 pour 157,6, attaquants 221 pour 220,9 ;
 // à valeur inchangés (67 pour 67,1). Défenseurs toujours au-dessus du réel (22 pour 29,7) : rien de démontré (p ≈ 0,08).
 // Les parts sont renormalisées sur l'alignement : le total de l'équipe ne change pas (ni pronostics, ni combinés).
-const SHARE={a:0.28, F:0.068, D:0.030};
+// RÉPARTITION v4 (21/11/2026) : rapprochement RETIRÉ (α = 0), parts tirées du temps de jeu. Le 0,28 du 07/11 avait été
+// mesuré sur des joueurs choisis par l'outil (plus probables, à valeur, écartés), donc vus trop haut par construction.
+// Tous les joueurs cotés (sca, 13–19/11, sans sélection) : profondeur relevée de 15 % et plus, 20 buts pour 29,6 annoncés
+// avec le rapprochement, 22,7 sans ; premiers trios abaissés, 125 pour 112,8 avec, 123,5 sans ; même test que le 07/11
+// (sachant les buts réels de l'équipe, 1 234 joueurs-matchs) : α le plus vraisemblable −0,04 [−0,22 ; +0,22]. Le temps de
+// jeu classe déjà les trios. Mécanisme gardé (identité à α = 0) ; garde-fou « relevé » sans objet ; journal sv:4 (R51).
+const SHARE={a:0, F:0.068, D:0.030};
 function shareM(p){ return posKey(p?.pos)==='D'?SHARE.D:SHARE.F; }
 function shareShrink(lg,ps){
   const tot=lg.reduce((a,b)=>a+b,0); if(!(tot>0)||!(SHARE.a>0)) return lg.slice();
@@ -5105,10 +5112,10 @@ function snapEntry(g,R){
       return pts.sort((x,y)=>Math.abs(x-6.0)-Math.abs(y-6.0))[0];})(),
     gkH:R.home.goalie?.name||null, gkA:R.away.goalie?.name||null,
     combo:(()=>{ const c=comboPick(g,R); return c?{b:c.base,k:c.k,L:c.L,s:c.s,p:c.p,...(c.alt?{a:{L:c.alt.L,s:c.alt.s,p:c.alt.p}}:{})}:null; })(),   // a : variante (11/10/2026)
-    sc:(R.players||[]).slice(0,3).map(p=>({id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:3,...xsOf(p),...prOf(p)})),   // 3 buteurs les plus probables (sv : version de la répartition ; 3 = parts rétrécies, pr = probabilité d'avant)
+    sc:(R.players||[]).slice(0,3).map(p=>({id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:4,...xsOf(p),...prOf(p)})),   // 3 buteurs les plus probables (sv : version de la répartition ; 3 = parts rétrécies, pr = probabilité d'avant)
     // buteurs à valeur (cote ≥ « dès ») : proposés (scv) et écartés par les garde-fous (scx), version 2 (08/10/2026)
     ...(()=>{ const all=(R.players||[]).filter(p=>!p.noHist).map(p=>{ const x=oddFor(g,p); if(!x) return null; const v=p.pGoal*x.o-1; if(v<CFG.minEdge) return null;
-        const gd=scoGuard(p,x.o); return {id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),o:x.o,src:x.src,v,pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:3,...xsOf(p),...prOf(p),...(gd?{g:gd.k}:{})}; })
+        const gd=scoGuard(p,x.o); return {id:p.id,n:p.name,t:p.team,p:+p.pGoal.toFixed(4),o:x.o,src:x.src,v,pf:shotCode(shotProfile(p)),po:posKey(p.pos),sv:4,...xsOf(p),...prOf(p),...(gd?{g:gd.k}:{})}; })
         .filter(Boolean).sort((a,b)=>b.v-a.v);
       return {scv:all.filter(x=>!x.g).slice(0,3), scx:[...all.filter(x=>x.g&&x.g!=='hi'&&x.g!=='up').slice(0,3),...all.filter(x=>x.g==='hi').slice(0,3),...all.filter(x=>x.g==='up').slice(0,3)]}; })(),   // 'hi' (25/10/2026) : 3 de plus, pour juger ce garde-fou sans évincer les autres ; 'up' (12/11/2026) : relevés, 3 de plus
     ...scaOf(g,R),                                      // tous les joueurs cotés (12/11/2026)
@@ -5560,7 +5567,7 @@ function scorerBilanHTML(bets,D,from){
     ${row('<b>proposés</b> (à valeur, depuis le 08/10)',R.v2)}${row('&nbsp;&nbsp;attaquants',R.F)}${row(`&nbsp;&nbsp;défenseurs (${pct(CFG.scMinD,0)} et plus)`,R.D)}
     ${row('&nbsp;&nbsp;annoncés moins de 12 %',R.b0)}${row('&nbsp;&nbsp;annoncés 12 à 20 %',R.b1)}${row('&nbsp;&nbsp;annoncés 20 à 30 %',R.b2)}${row('&nbsp;&nbsp;annoncés 30 % et plus',R.b3)}
     ${ZO.map((T,i)=>row(`&nbsp;&nbsp;cote ${bilOddLbl(i,SCO_ZCUT)}`,T,'bil-zone')).join('')}
-    ${row('écartés : écart suspect avec la cote',R.gap)}${row(`écartés : défenseur sous ${pct(CFG.scMinD,0)}`,R.d)}${row(`écartés : annoncés ${pct(CFG.scMaxP,0)} et plus (depuis le 25/10)`,R.hi,'bil-hi')}${row('écartés : relevés — valeur due au seul relèvement de la part (depuis le 12/11)',R.up,'bil-up')}
+    ${row('écartés : écart suspect avec la cote',R.gap)}${row(`écartés : défenseur sous ${pct(CFG.scMinD,0)}`,R.d)}${row(`écartés : annoncés ${pct(CFG.scMaxP,0)} et plus (depuis le 25/10)`,R.hi,'bil-hi')}${row('écartés : relevés — valeur due au seul relèvement de la part (du 12 au 21/11)',R.up,'bil-up')}
     ${row('proposés avant le 08/10 (ancienne répartition)',R.v1)}
     ${row('les 3 plus probables de chaque match (depuis le 08/10)',R.top)}${row('&nbsp;&nbsp;dont le n°1',R.n1)}</table></div>
     <p class="note">Proposés : cote relevée au coup d'envoi au-dessus du « dès ». Les écartés sont suivis pour juger les garde-fous : bilan s'ils avaient été joués ; s'ils marquaient autant qu'annoncé, les garde-fous seraient trop stricts. Les plus probables n'ont pas de cote relevée : seulement marqué / annoncé. Par tranche (17/10) : un joueur annoncé haut mais « à valeur » est un joueur sur lequel le modèle est plus optimiste que le marché — si la tranche « 30 % et plus » reste sous l'annoncé, c'est là que le modèle se trompe. Depuis le 25/10, ces joueurs ne sont plus proposés (garde-fou : sur eux, le marché a raison) ; il sera levé si, à 40 écartés réglés pour cette raison, leur bilan à 1 u est positif. Par cote (12/11) : les bornes du bilan de tes paris ; quand « prudence » est allumée, une tranche où les proposés marquent au moins autant qu'annoncé (${SCO_ZMIN} cas ou plus) garde sa valeur « ✓ ». Relevés (12/11) : la valeur n'existe que par le relèvement de la part du joueur (répartition du 07/11) — montrés, jamais proposés, à trancher à 300 réglés.</p>

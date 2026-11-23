@@ -305,6 +305,17 @@ table.roi-tab tr.roi-g td{border-top:none;padding-top:11px;font-size:10.5px;lett
 .roi-tip[hidden]{display:none}
 .roi-txt{margin:6px 0 0}
 details.bil-more>summary{margin-top:10px}
+/* Précision (23/11/2026) : bilan des buteurs en tête, mis en avant ; combinés repliés sous une ligne de résumé */
+.card.bil-lead{border-left-width:5px;box-shadow:0 0 0 1px rgba(255,176,32,.28)}
+.card.bil-lead>.head h2{color:var(--amber)}
+.bil-from{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+.bil-from input{padding:3px 6px}
+.bil-brief{margin:0 0 10px;font-size:13px;line-height:1.5}
+details.bil-fold>summary{cursor:pointer;list-style:none}
+details.bil-fold>summary::-webkit-details-marker{display:none}
+details.bil-fold>summary .bil-fold-m{display:inline-block;transition:transform .15s;color:var(--dim)}
+details.bil-fold[open]>summary .bil-fold-m{transform:rotate(90deg)}
+details.bil-fold:not([open])>summary{border-bottom:none}
 .cmb-s{font-size:10px;color:var(--dim);line-height:1.25}
 .cmb-eval{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-top:10px;font-size:12px}
 .cmb-eval select,.cmb-eval input{font-size:12px;padding:3px 6px}
@@ -582,8 +593,8 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-11-22';
-const BUILD_REV=2;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
+const BUILD='2026-11-23';
+const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
 const S = {
@@ -5568,8 +5579,32 @@ function bilDetails(X,pf,of,cuts,oddTitle){
     +bilTable(oddTitle,bilGroup(X,b=>bilOddKey(of(b),cuts)),k=>bilOddLbl(k,cuts),pf,of,num)
     +bilTable('valeur au moment du pari',bilGroup(X,bilValKey),bilValLbl,pf,of,num)+`</details>`;
 }
-function bilCard(cls,color,title,from,body){
-  return `<div class="card bil-card ${cls}" style="border-left-color:var(${color})"><div class="head"><h2>${title}</h2><div class="spacer"></div><span class="dimtxt mono" style="font-size:11.5px">${from?`depuis le ${fmtDay(from)}`:'toute la période'}</span></div><div class="body">${body}</div></div>`;
+// o.lead : mise en avant (bilan des buteurs, 23/11/2026) ; o.ctl : à droite de l'en-tête à la place de la période ;
+// o.fold : carte repliée (« details »), o.sum : sa ligne de résumé ; état ouvert gardé le temps de la session (BIL_FOLD)
+function bilCard(cls,color,title,from,body,o={}){
+  const right=o.ctl??`<span class="dimtxt mono" style="font-size:11.5px">${from?`depuis le ${fmtDay(from)}`:'toute la période'}</span>`;
+  if(o.fold) return `<details class="card bil-card ${cls} bil-fold" data-fold="${o.fold}"${BIL_FOLD[o.fold]?' open':''} style="border-left-color:var(${color})"><summary class="head"><h2><span class="bil-fold-m">▸</span> ${title}</h2>${o.sum?`<span class="dimtxt bil-fold-s" style="font-size:12px">${o.sum}</span>`:''}<div class="spacer"></div>${right}</summary><div class="body">${body}</div></details>`;
+  return `<div class="card bil-card ${cls}${o.lead?' bil-lead':''}" style="border-left-color:var(${color})"><div class="head"><h2>${title}</h2><div class="spacer"></div>${right}</div><div class="body">${body}</div></div>`;
+}
+// PRÉCISION (23/11/2026). Demande de Nicolas : « mettre dans Précision le bilan buteur depuis cette date et le mettre en avant
+// dans cet onglet ; mettre en secondaire le bilan des combinés vainqueurs + buts ». Le bilan des buteurs passe en tête de
+// l'onglet, mis en avant, avec sa propre date de début : par défaut le 22/11 (premier soir des lignes roses, la date du suivi
+// « depuis le 22/11 ») ; vide = toute la période ; indépendante du filtre « Depuis » du haut, qui garde le reste de l'onglet.
+// Le bilan des combinés est replié sous une ligne de résumé (ouvert au clic, le temps de la session).
+const SCO_FROM_DEF='2026-11-22', BIL_FOLD={};
+function scoFrom(){ let v=null; try{ v=localStorage.getItem('nhlvb_scfrom'); }catch(e){} return v==null?SCO_FROM_DEF:v; }
+function scoFromCtl(from){ return `<label class="bil-from">depuis le <input type="date" id="scFrom" value="${from}"></label>`
+  +(from?`<button class="btn sm" data-scfrom="">toute la période</button>`:`<button class="btn sm" data-scfrom="${SCO_FROM_DEF}">depuis le ${fmtDay(SCO_FROM_DEF)}</button>`); }
+// joueur ajouté en rose au bloc des buteurs (journal : drapeau 128 de sca, depuis le 22/11)
+function scaPink(e,id){ return !!e?.sca&&e.sca.split(';').some(x=>{ const q=x.split(':'); return +q[0]===+id&&!!(+q[4]&128); }); }
+// « En bref » en tête du bilan des buteurs : tes paris (en €), lignes roses et proposés par le modèle (1 u à la cote relevée)
+function scoBriefHTML(X,pf,of,R){
+  const P=[], cl=v=>v>0?'up':(v<0?'dn':''), s=(n,w)=>n>1?w+'s':w;
+  if(X.length){ const A=bilAgg(X,pf,of), roi=A.st>0?A.net/A.st:null;
+    P.push(`tes paris buteur <b class="${cl(A.net)}">${bilSg(A.net)} €</b> (${A.n} ${s(A.n,'réglé')}, ${A.w} ${s(A.w,'gagné')}${roi==null?'':`, ROI ${roi>=0?'+':''}${(100*roi).toFixed(0)} %`})`); }
+  for(const [l,T,g] of [['lignes roses',R.r3x,'réglée'],['proposés par le modèle',R.v2,'réglé']]) if(T.nm)
+    P.push(`${l} <b class="${cl(T.net)}">${bilSg(T.net,1)} u</b> (${T.n} ${s(T.n,g)} : ${T.w} ${s(T.w,'but')} pour ${fmt(T.ao,1)} selon la cote)`);
+  return P.length?`<p class="bil-brief"><b>En bref</b> — ${P.join(' · ')}</p>`:'';
 }
 // --- 1. combinés vainqueur + buts
 function comboBilanHTML(bets,D,from){
@@ -5618,8 +5653,10 @@ function comboBilanHTML(bets,D,from){
       <details class="bil-more"><summary class="sec" style="cursor:pointer">Propositions par semaine</summary><div class="tscroll"><table class="bil">${head('semaine')}${wk}</table></div></details>
       <p class="note">Colonne « à la cote dès » : chaque proposition jouée 1 unité à sa cote minimale, (1 + ${pct(e0,0)}) / probabilité ; si le modèle annonce juste, ce bilan tourne autour de +${pct(e0,0)} par pari — négatif, il surestime ses combinés. Règlement de la proposition : à 60 min, une prolongation est un nul et le but décisif ne compte pas.</p>`;
   }
+  const A0=X.length?bilAgg(X,pf,of):null, s0=(n,w)=>n>1?w+'s':w;     // ligne de résumé de la carte repliée (23/11/2026)
+  const sum=`${A0?`tes combinés : ${A0.n} ${s0(A0.n,'réglé')}, ${A0.w} ${s0(A0.w,'gagné')}, <b class="${A0.net>0?'up':(A0.net<0?'dn':'')}">${bilSg(A0.net)} €</b>`:'aucun combiné réglé'}${C.length?` · ${C.length} ${s0(C.length,'proposé')} par l'outil`:''}`;
   return bilCard('bil-cmb','--green','Bilan — combinés vainqueur + buts',from,mine+prop
-    +`<p class="note">Gagnés / attendus : probabilité du modèle au moment du pari, additionnée. Sous une centaine de paris, un écart de ±5 gagnés est du hasard ordinaire.</p>`);
+    +`<p class="note">Gagnés / attendus : probabilité du modèle au moment du pari, additionnée. Sous une centaine de paris, un écart de ±5 gagnés est du hasard ordinaire.</p>`,{fold:'cmb',sum});
 }
 // --- 2. buteurs
 function scorerBilanHTML(bets,D,from){
@@ -5630,14 +5667,14 @@ function scorerBilanHTML(bets,D,from){
   if(X.length){
     const A=bilAgg(X,pf,of), ao=X.reduce((s,b)=>s+(of(b)>1?1/of(b):0),0);
     // d'où venait le joueur : listes de l'outil au coup d'envoi (journal)
-    const orig=b=>{ const e=LG.get(b.gameId); if(!e) return 4; const id=b.sc.id; return has(e.scv,id)?0:(has(e.scx,id)?1:(has(e.sc,id)?2:3)); };
-    const ORIG=['proposé par l\'outil (à valeur)','écarté par les garde-fous','parmi les 3 plus probables, non proposé','hors des listes de l\'outil','match non journalisé'];
+    const orig=b=>{ const e=LG.get(b.gameId); if(!e) return 4; const id=b.sc.id; return has(e.scv,id)?0:(has(e.scx,id)?1:(scaPink(e,id)?5:(has(e.sc,id)?2:3))); };   // 5 : en rose (23/11/2026)
+    const ORIG=['proposé par l\'outil (à valeur)','écarté par les garde-fous','parmi les 3 plus probables, non proposé','hors des listes de l\'outil','match non journalisé','ajouté en rose à la carte (3 dernières semaines seules)'], ORD=[0,1,5,2,3,4];
     const pos=b=>{ if(b.sc.po) return b.sc.po; const e=LG.get(b.gameId); for(const a of [e?.scv,e?.scx,e?.sc]){ const s=has(a,b.sc.id); if(s?.po) return s.po; }
       const sk=S.teams.get(b.sc.team)?.skaters?.find(x=>x.id===b.sc.id); return sk?posKey(sk.pos):'?'; };
     const POS={F:'attaquants',D:'défenseurs','?':'poste inconnu (paris d\'avant le 08/10)'}, PO=['F','D','?'];
     const V=bilGroup(X,b=>b.date>='2026-10-08'?0:1);
     mine=`<div class="sec">Tes paris buteur</div>`+bilKpis(A,pend,ao,refund?`${refund} remboursé${refund>1?'s':''} (n'a pas joué)`:'')
-      +bilTable('d\'où venait le joueur',bilGroup(X,orig),k=>ORIG[k],pf,of,(a,b)=>a-b,A)
+      +bilTable('d\'où venait le joueur',bilGroup(X,orig),k=>ORIG[k],pf,of,(a,b)=>ORD.indexOf(a)-ORD.indexOf(b),A)
       +bilTable('poste',bilGroup(X,pos),k=>POS[k]||k,pf,of,(a,b)=>PO.indexOf(a)-PO.indexOf(b))
       +(V.size>1?bilTable('répartition des buteurs',V,k=>['depuis la révision du 08/10','avant la révision du 08/10'][k],pf,of,(a,b)=>a-b):'')
       +bilDetails(X,pf,of,BIL_ODDS.s,'cote du buteur');
@@ -5668,8 +5705,8 @@ function scorerBilanHTML(bets,D,from){
     <p class="note">Proposés : cote relevée au coup d'envoi au-dessus du « dès ». Les écartés sont suivis pour juger les garde-fous : bilan s'ils avaient été joués ; s'ils marquaient autant qu'annoncé, les garde-fous seraient trop stricts. Les plus probables n'ont pas de cote relevée : seulement marqué / annoncé. Par tranche (17/10) : un joueur annoncé haut mais « à valeur » est un joueur sur lequel le modèle est plus optimiste que le marché — si la tranche « 30 % et plus » reste sous l'annoncé, c'est là que le modèle se trompe. Depuis le 25/10, ces joueurs ne sont plus proposés (garde-fou : sur eux, le marché a raison) ; il sera levé si, à 40 écartés réglés pour cette raison, leur bilan à 1 u est positif. Par cote (12/11) : les bornes du bilan de tes paris ; quand « prudence » est allumée, une tranche où les proposés marquent au moins autant qu'annoncé (${SCO_ZMIN} cas ou plus) garde sa valeur « ✓ ». Relevés (12/11) : la valeur n'existe que par le relèvement de la part du joueur (répartition du 07/11) — montrés, jamais proposés, à trancher à 300 réglés.</p>
     ${R.hi.nm>=40?`<p class="note bil-hi-crit"><b>Critère du garde-fou « annoncé ${pct(CFG.scMaxP,0)} et plus »</b> : ${R.hi.nm} écartés réglés, ${R.hi.w} ont marqué (${fmt(R.hi.ao,1)} selon la cote), bilan à 1 u ${bilSg(R.hi.net,1)} u → ${R.hi.net>0?`<span class="up">atteint : il peut être levé (Réglages, probabilité max. proposée à 100)</span>${R.hi.vr>0?` <span class="dimtxt bil-hi-m">— bilan ${Math.abs(R.hi.net)<=marge(R.hi)?'dans':'au-delà de'} la marge du hasard (± ${fmt(marge(R.hi),0)} u)${Math.abs(R.hi.net)<=marge(R.hi)?' : rien ne dit encore que ces joueurs rapportent':''}</span>`:''}`:'maintenu'}.</p>`:''}`:'';
   const det=scorerDashHTML(D);
-  return bilCard('bil-sco','--amber','Bilan — buteurs',from,mine+prop
-    +(det?`<div class="sec" style="margin-top:14px">Suivi détaillé (version en service, garde-fous, plus probables, profil au tir, tirs attendus)</div>${det}`:''));
+  return bilCard('bil-sco','--amber','Bilan — buteurs',from,scoBriefHTML(X,pf,of,R)+mine+prop
+    +(det?`<div class="sec" style="margin-top:14px">Suivi détaillé (version en service, garde-fous, plus probables, profil au tir, tirs attendus)</div>${det}`:''),{lead:true,ctl:scoFromCtl(from)});
 }
 /* ---------- ROI : progression et potentiel (20/10/2026) ---------- */
 // Demande : « mettre au tout début de Précision tous les ROI, leur progression et leur potentiel à l'avenir sur la
@@ -5874,6 +5911,8 @@ function renderBt(){
   const inPeriod=d=>!from||d>=from;
   const bets=S.bets.filter(b=>inPeriod(b.date));
   const done=S.log.filter(x=>x.res&&inPeriod(x.date));
+  const sFrom=scoFrom(), sIn=d=>!sFrom||d>=sFrom;                 // bilan des buteurs : sa propre date (23/11/2026)
+  const sBets=S.bets.filter(b=>sIn(b.date)), sDone=S.log.filter(x=>x.res&&sIn(x.date));
 
   /* ---------- 1. mes paris réels ---------- */
   const sb=bets.filter(b=>b.settled);
@@ -6030,11 +6069,11 @@ function renderBt(){
   </div></div>`;
 
   el.innerHTML=`
+  ${scorerBilanHTML(sBets,sDone,sFrom)}
   ${roiHTML(from)}
   ${dashHTML(done)}
   ${bilan}
   ${comboBilanHTML(bets,done,from)}
-  ${scorerBilanHTML(bets,done,from)}
   <div class="sec">Mes paris réels</div>
   ${mesParis}
 
@@ -7069,6 +7108,10 @@ $('#propSort').addEventListener('change',renderProps);
 $('#getOdds').addEventListener('click',()=>fetchOdds());
 $('#logDay').addEventListener('click',logDay);
 $('#btFrom').addEventListener('change',()=>{safeSet('nhlvb_from',$('#btFrom').value);renderBt();});
+// bilan des buteurs : sa date (« depuis le », « toute la période ») ; carte des combinés repliée : état gardé (23/11/2026)
+$('#bt').addEventListener('change',e=>{ if(e.target.id==='scFrom'){ safeSet('nhlvb_scfrom',e.target.value); renderBt(); } });
+$('#bt').addEventListener('click',e=>{ const b=e.target.closest?.('[data-scfrom]'); if(b){ safeSet('nhlvb_scfrom',b.dataset.scfrom); renderBt(); } });
+$('#bt').addEventListener('toggle',e=>{ const d=e.target; if(d?.matches?.('details.bil-fold')) BIL_FOLD[d.dataset.fold]=d.open; },true);
 $('#settle').addEventListener('click',()=>settleAll());
 $('#expJson').addEventListener('click',exportJson);
 $('#impJson').addEventListener('click',()=>$('#fileIn').click());

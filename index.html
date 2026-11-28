@@ -27,7 +27,7 @@
   --red:#e03146;           /* ligne centrale, lampe de but */
   --crease:#7fc7e8;        /* territoire de but */
   --amber:#ffb020;         /* afficheur d'aréna */
-  --green:#49d17f; --violet:#a78bfa; --pink:#e879f9;   /* rose : 3 dernières semaines (22/11/2026) */
+  --green:#49d17f; --violet:#a78bfa; --pink:#e879f9;   /* rose : 3 dernières semaines (22/11/2026) */ --gold:#facc15;   /* or : valeur des deux façons (28/11/2026) */
   --disp:'Big Shoulders Display','Big Shoulders',Oswald,Impact,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
 }
@@ -207,6 +207,12 @@ table.cmb tr.r3x td{background:rgba(232,121,249,.06)}
 table.cmb tr.r3x td:first-child{box-shadow:inset 3px 0 0 var(--pink)}
 tr.r3x td.l>b,tr.r3x .r3x-p,tr.r3x .up{color:var(--pink)}
 .r3x-note b{color:var(--pink)}
+/* en or (28/11/2026) : jouables des deux façons, modèle ET 3 dernières semaines — passe avant le rose */
+.shc.w2{color:var(--gold);border-color:rgba(250,204,21,.6);font-weight:600}
+table.cmb tr.dbl td{background:rgba(250,204,21,.08)}
+table.cmb tr.dbl td:first-child{box-shadow:inset 3px 0 0 var(--gold)}
+tr.dbl td.l>b{color:var(--gold)}
+.dbl-note b{color:var(--gold)}
 /* vue compacte, état de la forme */
 .viewbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 0 8px;font-size:12px}
 .viewbar .btn.on{border-color:var(--crease);color:var(--ice)}
@@ -593,7 +599,7 @@ const LEAGUE = { sogPerGame:29.4, teamToiMin:300 };  // repères ligue (TOI pati
 // DATE DE CETTE VERSION (19/10/2026) : affichée en haut de la page, dans l'auto-test et dans l'export (diag.version).
 // Export du 19/10 : l'outil en service était encore celui du 14/10 sans que rien ne le montre. La plus récente date
 // ouverte dans ce navigateur est gardée (nhlvb_build) : un fichier plus ancien le signale.
-const BUILD='2026-11-23';
+const BUILD='2026-11-28';
 const BUILD_REV=1;                                   // livraisons du même jour : « (2) » après la date (1 = rien)
 const buildLbl=(y=true,b=BUILD)=>`${b.slice(8,10)}/${b.slice(5,7)}${y?'/'+b.slice(0,4):''}`;
 
@@ -3508,13 +3514,32 @@ function r3xValHTML(p,o){ const r=recent3w(p); if(!(o>1)||!(r?.p>0)) return '<sp
   const sg=v=>`${v>=0?'+':''}${(100*v).toFixed(0)} %`, v=r.p*o-1;
   return `<span class="${v>=CFG.minEdge?'up':(v<0?'dn':'dimtxt')}" title="${escHtml(`Valeur selon ses 3 dernières semaines seules : ${pct(r.p,1)} × ${fmt(o,2)} − 1. Selon le modèle : ${pct(p.pGoal,1)} × ${fmt(o,2)} − 1.`)}">${sg(v)}</span><div class="sh2">modèle ${sg(p.pGoal*o-1)}</div>`; }
 function r3xRowHTML(g,z,inp){ const {p,x,r}=z, sp=shotProfile(p), k=`${g.id}:${p.id}`;
-  return `<tr class="r3x"><td class="l"><b>${escHtml(p.name)}</b> <span class="dimtxt">${p.team} · ${(p.toi/60).toFixed(0)}'${p.ppMin!=null?` · PP ${fmt(p.ppMin,1)}'`:''}</span>${r3wTagHTML(p,x,true)}${shotChips(sp)}</td>`
+  return `<tr class="r3x${dblOf(p,x?.o)?' dbl':''}" data-dbl="${k}"><td class="l"><b>${escHtml(p.name)}</b> <span class="dimtxt">${p.team} · ${(p.toi/60).toFixed(0)}'${p.ppMin!=null?` · PP ${fmt(p.ppMin,1)}'`:''}</span>${r3wTagHTML(p,x,true)}<span data-dblt="${k}">${dblTagHTML(p,x?.o)}</span>${shotChips(sp)}</td>`
     +`<td class="mono"><b class="r3x-p">${pct(r.p,0)}</b><div class="sh2">modèle ${pct(p.pGoal,0)}</div></td>${shotCellsHTML(sp)}`
     +`<td class="mono" data-r3c="${k}">${r3wCellHTML(p,x)}</td>`
     +`<td class="mono">${x?`${fmt(x.o,2)} <span class="dimtxt">${x.src==='US'?'US':'toi'}</span>`:'—'}</td><td>${inp(p)}</td><td class="mono" data-r3v="${k}">${r3xValHTML(p,x?x.o:null)}</td>`
     +`<td><button class="btn sm" data-scbet="${k}" title="Enregistrer un pari buteur sur ce joueur">＋</button></td></tr>`; }
 function r3xNoteHTML(byValue,n){ if(!n) return '';
   return `<div class="dimtxt r3x-note" style="font-size:11px"><b>En rose (« 3 sem. »)</b> : ${byValue?`jusqu'à ${R3W_XN} joueurs de plus, jouables à leur cote selon leurs seules 3 dernières semaines, les plus probables d'abord, mêlés aux autres à leur valeur sur 3 semaines`:`les plus probables selon leurs seules 3 dernières semaines (${R3W_XN} au plus ; aucune cote encore dans ce match : saisis la tienne, la valeur s'affiche)`} — en parallèle du modèle, qui n'en tient pas compte. Ces lignes, rejouées du 13 au 19/11 : 50 buts pour 63,1 selon la cote, −22 % à 1 u ; suivi au bilan des buteurs (Précision).</div>`; }
+// BUTEURS EN OR : VALEUR DES DEUX FAÇONS (28/11/2026). Demande de Nicolas : « mettre en lumière parmi les buteurs en blanc
+// et rose, dans une autre couleur, ceux qui seraient à plus-value de les jouer dans n'importe quelle circonstance en fonction
+// de leur cote ». Jouable des deux façons à cette cote : le modèle le propose (valeur ≥ seuil, sans garde-fou — le « ✓ »
+// d'une ligne blanche) ET ses seules 3 dernières semaines le jugent jouable (cote ≥ « dès 3 sem. ») ; autrement dit, jouable
+// même avec la plus prudente des deux probabilités. Rejoué sur le journal du 13 au 27/11 (3 273 joueurs cotés réglés, cote
+// US relevée) : 209 joueurs, 40 buts pour 30,7 selon la cote, +53,6 u (+26 %), au moins autant par le seul hasard 4,5 % ;
+// « modèle seul » (proposé, pas jouable sur 3 semaines) 259, −22 % ; « 3 semaines seules » 1 033, −5 %. Prometteur, pas
+// démontré. Affichage seulement : la ligne (blanche ou rose) passe en or avec l'étiquette « double » et suit la saisie de ta
+// cote ; rien d'autre ne change. Suivi au bilan des buteurs (« dont aussi proposés par le modèle — en or »), à la cote du
+// journal (drapeau 4 de sca + 3 semaines en fin de ligne).
+function dblOf(p,o){ if(!(o>1)||!(p?.pGoal>0)) return null; const r=recent3w(p); if(!(r?.p>0)||o<r.need) return null;
+  const v=p.pGoal*o-1; if(v<CFG.minEdge||scoGuard(p,o)) return null;
+  return {r,v,v3:r.p*o-1,need:Math.max(r.need,(1+CFG.minEdge)/p.pGoal)}; }
+function dblTagHTML(p,o){ const d=dblOf(p,o); if(!d) return ''; const sg=v=>`${v>=0?'+':''}${(100*v).toFixed(0)} %`;
+  return `<span class="shc w2" title="${escHtml(`Valeur des deux façons à ${fmt(o,2)} : selon le modèle ${pct(p.pGoal,0)} → ${sg(d.v)} ; selon ses seules 3 dernières semaines, ${d.r.g} but${d.r.g>1?'s':''} en ${d.r.n} matchs → ${pct(d.r.p,0)}, ${sg(d.v3)}. Jouable des deux façons dès ${fmt(d.need,2)}. Rejoué du 13 au 27/11 : 209 joueurs, 40 buts pour 30,7 selon la cote, +26 % à 1 u (4,5 % par le seul hasard) — prometteur, pas démontré.`)}">double</span>`; }
+function dblTagSlot(g,p,x){ const r=recent3w(p); return r?.p>0?`<span data-dblt="${g.id}:${p.id}">${dblTagHTML(p,x?.o)}</span>`:''; }
+function dblRowAttr(g,p,x){ const r=recent3w(p); return r?.p>0?`${dblOf(p,x?.o)?' class="dbl"':''} data-dbl="${g.id}:${p.id}"`:''; }
+function dblNoteHTML(n){ if(!n) return '';
+  return `<div class="dimtxt dbl-note" style="font-size:11px"><b>En or (« double »)</b> : jouables des deux façons à leur cote — le modèle les propose (valeur, sans garde-fou) ET leurs seules 3 dernières semaines aussi (cote ≥ « dès 3 sem. »). Rejoué du 13 au 27/11 : 209 joueurs, 40 buts pour 30,7 selon la cote, +26 % à 1 u (4,5 % par le seul hasard) ; modèle seul −22 %, 3 semaines seules −5 % — prometteur, pas démontré ; suivi au bilan des buteurs (Précision).</div>`; }
 function scorerBlockHTML(g,R){
   if(!R?.players?.length) return '';
   const inp=p=>`<input class="sco-in" type="number" step="0.01" min="1.01" placeholder="ta cote" data-sco="${g.id}:${p.id}" value="${scoOdd(g.id,p.id)||''}">`;
@@ -3527,7 +3552,7 @@ function scorerBlockHTML(g,R){
     : `<span class="dimtxt">${key?'charge d\'abord les cotes du match (Value / cotes)':'clé The Odds API à saisir (Value / cotes)'} pour les cotes buteur US</span>`;
   return `<div class="sco-block"><div class="flex" style="justify-content:space-between;gap:8px;margin:0 0 4px"><div class="sec" style="margin:0">Buteurs — ${byValue?'meilleur rapport probabilité / cote':'les plus probables du match'}</div>${btn}</div>
     <div class="tscroll"><table class="cmb sco-t"><tr><th class="l">joueur</th><th>marque</th>${SHOT_TH}<th>jouable dès</th><th>cote</th><th>ta cote</th><th>valeur</th><th title="J'ai parié sur ce buteur">parier</th></tr>
-    ${ALL.map(z=>{ if(z.r) return r3xRowHTML(g,z,inp); const {p,x}=z, sp=shotProfile(p); return `<tr><td class="l"><b>${escHtml(p.name)}</b> <span class="dimtxt">${p.team} · ${(p.toi/60).toFixed(0)}'${p.ppMin!=null?` · PP ${fmt(p.ppMin,1)}'`:''}</span>${r3wTagSlot(g,p,x)}${shotChips(sp)}${xgLineHTML(p)}</td><td class="mono">${pct(p.pGoal,0)}</td>${shotCellsHTML(sp)}<td class="mono">${scoNeedTxt(p.pGoal,true,pgG(p))}</td>
+    ${ALL.map(z=>{ if(z.r) return r3xRowHTML(g,z,inp); const {p,x}=z, sp=shotProfile(p); return `<tr${dblRowAttr(g,p,x)}><td class="l"><b>${escHtml(p.name)}</b> <span class="dimtxt">${p.team} · ${(p.toi/60).toFixed(0)}'${p.ppMin!=null?` · PP ${fmt(p.ppMin,1)}'`:''}</span>${r3wTagSlot(g,p,x)}${dblTagSlot(g,p,x)}${shotChips(sp)}${xgLineHTML(p)}</td><td class="mono">${pct(p.pGoal,0)}</td>${shotCellsHTML(sp)}<td class="mono">${scoNeedTxt(p.pGoal,true,pgG(p))}</td>
       <td class="mono">${x?`${fmt(x.o,2)} <span class="dimtxt">${x.src==='US'?'US':'toi'}</span>`:'—'}</td><td>${inp(p)}</td><td class="mono" data-scov="${g.id}:${p.id}">${scoValTxt(p.pGoal,x?x.o:null,p)}</td>
       <td><button class="btn sm" data-scbet="${g.id}:${p.id}" title="Enregistrer un pari buteur sur ce joueur">＋</button></td></tr>`; }).join('')}</table></div>
     <div class="sco-best" data-scobest="${g.id}" style="font-size:12px;margin-top:3px">${scoBestTxt(g,R)}</div>${r3wLineHTML(g,R)}
@@ -3535,7 +3560,7 @@ function scorerBlockHTML(g,R){
       return `<div class="dimtxt" style="font-size:11px">Supériorité numérique ce soir : ${c.map(({s,c})=>{ const opp=g[s==='home'?'away':'home'].abv;
         return `<b>${g[s].abv}</b> ×${fmt(c.M,2)} <span title="part des buts en supériorité : ${pct(c.Q,0)} en moyenne → ${pct(c.F,0)} ce soir">(${opp} pénalisé ${fmt(c.sh,1)} fois/match, ${pct(c.conc,0)} de buts concédés en infériorité)</span>`; }).join(' · ')} — les buteurs du power play en profitent, les autres en perdent d'autant ; le total de l'équipe ne change pas.</div>`; })()}
     ${hidden.length?`<div class="dimtxt" style="font-size:11px">Sans historique NHL (recrue, rappelé de l'AHL), jamais classés — leur probabilité vient d'un taux générique de poste : ${hidden.map(p=>escHtml(p.name)).join(', ')}.</div>`:''}
-    <div class="dimtxt" style="font-size:11px">${SHOT_NOTE()}</div>${r3xNoteHTML(byValue,ext.length)}
+    <div class="dimtxt" style="font-size:11px">${SHOT_NOTE()}</div>${r3xNoteHTML(byValue,ext.length)}${dblNoteHTML(ALL.filter(z=>dblOf(z.p,z.x?.o)).length)}
     <div class="dimtxt" style="font-size:11px">${byValue?`Classés par valeur (probabilité × cote − 1) : un outsider bien payé passe devant un favori trop peu payé. « US » : meilleure cote des bookmakers américains (référence ; vérifie la tienne). `:''}Tous les joueurs : onglet Buteurs &amp; tirs.</div></div>`;
 }
 // COTES BUTEUR US (05/10/2026) : référence de marché pour la valeur buteur (The Odds API, marché
@@ -3610,7 +3635,8 @@ function bindScorerInputs(){
     document.querySelectorAll(`[data-r3w="${gid}"]`).forEach(x=>x.innerHTML=r3wLineTxt(g,R));                       // 3 semaines (22/11/2026)
     if(p) document.querySelectorAll(`[data-r3c="${k}"]`).forEach(x=>x.innerHTML=r3wCellHTML(p,o>1?{o}:usOddFor(g,p)));
     if(p) document.querySelectorAll(`[data-r3v="${k}"]`).forEach(x=>x.innerHTML=r3xValHTML(p,o>1?o:(usOddFor(g,p)?.o||null)));   // lignes roses (22/11/2026, 2e livraison)
-    if(p) document.querySelectorAll(`[data-r3t="${k}"]`).forEach(x=>x.innerHTML=r3wTagHTML(p,o>1?{o}:usOddFor(g,p),false)); });
+    if(p) document.querySelectorAll(`[data-r3t="${k}"]`).forEach(x=>x.innerHTML=r3wTagHTML(p,o>1?{o}:usOddFor(g,p),false));
+    if(p) document.querySelectorAll(`tr[data-dbl="${k}"]`).forEach(tr=>{ const oo=o>1?o:(usOddFor(g,p)?.o||null); tr.classList.toggle('dbl',!!dblOf(p,oo)); tr.querySelectorAll('[data-dblt]').forEach(t=>t.innerHTML=dblTagHTML(p,oo)); });   /* en or (28/11/2026) */ });
 }
 
 // VUE COMPACTE (défaut, 04/10/2026) : une ligne par match — heure, gardiens, pronostic, score prévu,
@@ -5602,7 +5628,7 @@ function scoBriefHTML(X,pf,of,R){
   const P=[], cl=v=>v>0?'up':(v<0?'dn':''), s=(n,w)=>n>1?w+'s':w;
   if(X.length){ const A=bilAgg(X,pf,of), roi=A.st>0?A.net/A.st:null;
     P.push(`tes paris buteur <b class="${cl(A.net)}">${bilSg(A.net)} €</b> (${A.n} ${s(A.n,'réglé')}, ${A.w} ${s(A.w,'gagné')}${roi==null?'':`, ROI ${roi>=0?'+':''}${(100*roi).toFixed(0)} %`})`); }
-  for(const [l,T,g] of [['lignes roses',R.r3x,'réglée'],['proposés par le modèle',R.v2,'réglé']]) if(T.nm)
+  for(const [l,T,g] of [['en or (valeur des deux façons)',R.r3d,'réglé'],['lignes roses',R.r3x,'réglée'],['proposés par le modèle',R.v2,'réglé']]) if(T.nm)
     P.push(`${l} <b class="${cl(T.net)}">${bilSg(T.net,1)} u</b> (${T.n} ${s(T.n,g)} : ${T.w} ${s(T.w,'but')} pour ${fmt(T.ao,1)} selon la cote)`);
   return P.length?`<p class="bil-brief"><b>En bref</b> — ${P.join(' · ')}</p>`:'';
 }
@@ -5680,7 +5706,7 @@ function scorerBilanHTML(bets,D,from){
       +bilDetails(X,pf,of,BIL_ODDS.s,'cote du buteur');
   }else mine=`<p class="note">Aucun pari buteur réglé ${from?'sur la période':'pour l\'instant'}${pend?` (${pend} en attente)`:''} : bouton « ＋ » d'un buteur (carte du match ou Buteurs &amp; tirs).</p>`;
   // joueurs suivis par l'outil (journal) : proposés, écartés, plus probables — 1 unité à la cote relevée
-  const z=()=>({n:0,w:0,a:0,ao:0,nm:0,net:0,vr:0}), R={v2:z(),F:z(),D:z(),b0:z(),b1:z(),b2:z(),b3:z(),gap:z(),d:z(),hi:z(),up:z(),v1:z(),top:z(),n1:z(),r3:z(),r3n:z(),r3x:z()};
+  const z=()=>({n:0,w:0,a:0,ao:0,nm:0,net:0,vr:0}), R={v2:z(),F:z(),D:z(),b0:z(),b1:z(),b2:z(),b3:z(),gap:z(),d:z(),hi:z(),up:z(),v1:z(),top:z(),n1:z(),r3:z(),r3n:z(),r3x:z(),r3d:z()};
   const ZO=Array.from({length:SCO_ZCUT.length+1},z);       // proposés par tranche de cote (12/11/2026)
   const band=p=>p<0.12?'b0':(p<0.20?'b1':(p<0.30?'b2':'b3'));   // tranche de probabilité annoncée (17/10/2026)
   const add=(T,s,r,money)=>{ T.n++; T.a+=s.p; if(r) T.w++; if(money&&s.o>1){ T.nm++; T.ao+=1/s.o; T.net+=r?s.o-1:-1; T.vr+=s.o-1; } };   // vr : variance du bilan si la cote dit vrai (12/11/2026)
@@ -5691,7 +5717,7 @@ function scorerBilanHTML(bets,D,from){
     // jouables selon les 3 dernières semaines seules (22/11/2026) : à la cote relevée, annoncés selon les 3 semaines
     if(e.sca&&e.scaR) e.sca.split(';').forEach((x,i)=>{ const q=x.split(':'), y=e.scaR[i]; if(q.length<8||(y!=='1'&&y!=='0')) return;
       const g3=+q[5], n3=+q[6], o=+q[3]/100; if(!(n3>=R3W_MIN&&g3>0&&o>1)) return; const p3=1-Math.exp(-g3/n3); if(o<(1+CFG.minEdge)/p3) return;
-      const sc={p:p3,o}; add(R.r3,sc,y==='1',true); if(!(+q[4]&4)) add(R.r3n,sc,y==='1',true); if(+q[4]&128) add(R.r3x,sc,y==='1',true); }); }
+      const sc={p:p3,o}; add(R.r3,sc,y==='1',true); if(!(+q[4]&4)) add(R.r3n,sc,y==='1',true); else add(R.r3d,sc,y==='1',true); if(+q[4]&128) add(R.r3x,sc,y==='1',true); }); }
   const row=(l,T,cls)=>T.n?`<tr${cls?` class="${cls}"`:''}><td class="l">${l}</td><td>${T.n}</td><td class="mono">${T.w} <span class="dimtxt">/ ${fmt(T.a,1)}</span></td><td class="mono">${T.nm?fmt(T.ao,1):'—'}</td><td class="mono ${T.nm?(T.net>0?'up':(T.net<0?'dn':'')):''}">${T.nm?bilSg(T.net,1)+' u':'—'}</td><td class="mono">${T.nm?`${T.net>=0?'+':''}${(100*T.net/T.nm).toFixed(0)} %`:'—'}</td></tr>`:'';
   const any=Object.values(R).some(T=>T.n), marge=T=>2*Math.sqrt(T.vr||0);     // ± 2 écarts types du bilan à 1 u
   const prop=any?`<div class="sec" style="margin-top:14px">Buteurs suivis par l'outil (journal, au coup d'envoi)</div>
@@ -5699,7 +5725,7 @@ function scorerBilanHTML(bets,D,from){
     ${row('<b>proposés</b> (à valeur, depuis le 08/10)',R.v2)}${row('&nbsp;&nbsp;attaquants',R.F)}${row(`&nbsp;&nbsp;défenseurs (${pct(CFG.scMinD,0)} et plus)`,R.D)}
     ${row('&nbsp;&nbsp;annoncés moins de 12 %',R.b0)}${row('&nbsp;&nbsp;annoncés 12 à 20 %',R.b1)}${row('&nbsp;&nbsp;annoncés 20 à 30 %',R.b2)}${row('&nbsp;&nbsp;annoncés 30 % et plus',R.b3)}
     ${ZO.map((T,i)=>row(`&nbsp;&nbsp;cote ${bilOddLbl(i,SCO_ZCUT)}`,T,'bil-zone')).join('')}
-    ${row('écartés : écart suspect avec la cote',R.gap)}${row(`écartés : défenseur sous ${pct(CFG.scMinD,0)}`,R.d)}${row(`écartés : annoncés ${pct(CFG.scMaxP,0)} et plus (depuis le 25/10)`,R.hi,'bil-hi')}${row('écartés : relevés — valeur due au seul relèvement de la part (du 12 au 21/11)',R.up,'bil-up')}${row(`<span title="${escHtml(R3W_TIP)}">jouables selon les 3 dernières semaines seules (cote ≥ « dès 3 sem. », depuis le 22/11)</span>`,R.r3,'bil-r3')}${row('&nbsp;&nbsp;dont non proposés par le modèle',R.r3n,'bil-r3')}${row('&nbsp;&nbsp;dont ajoutés en rose à la carte du match (5 au plus, depuis le 22/11)',R.r3x,'bil-r3')}
+    ${row('écartés : écart suspect avec la cote',R.gap)}${row(`écartés : défenseur sous ${pct(CFG.scMinD,0)}`,R.d)}${row(`écartés : annoncés ${pct(CFG.scMaxP,0)} et plus (depuis le 25/10)`,R.hi,'bil-hi')}${row('écartés : relevés — valeur due au seul relèvement de la part (du 12 au 21/11)',R.up,'bil-up')}${row(`<span title="${escHtml(R3W_TIP)}">jouables selon les 3 dernières semaines seules (cote ≥ « dès 3 sem. », depuis le 22/11)</span>`,R.r3,'bil-r3')}${row('&nbsp;&nbsp;dont non proposés par le modèle',R.r3n,'bil-r3')}${row('&nbsp;&nbsp;dont aussi proposés par le modèle — en or, valeur des deux façons (28/11)',R.r3d,'bil-r3')}${row('&nbsp;&nbsp;dont ajoutés en rose à la carte du match (5 au plus, depuis le 22/11)',R.r3x,'bil-r3')}
     ${row('proposés avant le 08/10 (ancienne répartition)',R.v1)}
     ${row('les 3 plus probables de chaque match (depuis le 08/10)',R.top)}${row('&nbsp;&nbsp;dont le n°1',R.n1)}</table></div>
     <p class="note">Proposés : cote relevée au coup d'envoi au-dessus du « dès ». Les écartés sont suivis pour juger les garde-fous : bilan s'ils avaient été joués ; s'ils marquaient autant qu'annoncé, les garde-fous seraient trop stricts. Les plus probables n'ont pas de cote relevée : seulement marqué / annoncé. Par tranche (17/10) : un joueur annoncé haut mais « à valeur » est un joueur sur lequel le modèle est plus optimiste que le marché — si la tranche « 30 % et plus » reste sous l'annoncé, c'est là que le modèle se trompe. Depuis le 25/10, ces joueurs ne sont plus proposés (garde-fou : sur eux, le marché a raison) ; il sera levé si, à 40 écartés réglés pour cette raison, leur bilan à 1 u est positif. Par cote (12/11) : les bornes du bilan de tes paris ; quand « prudence » est allumée, une tranche où les proposés marquent au moins autant qu'annoncé (${SCO_ZMIN} cas ou plus) garde sa valeur « ✓ ». Relevés (12/11) : la valeur n'existe que par le relèvement de la part du joueur (répartition du 07/11) — montrés, jamais proposés, à trancher à 300 réglés.</p>
